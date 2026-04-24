@@ -239,10 +239,9 @@ Each phase must validate before moving to the next — small, incremental steps.
 - `backend/arena/arena.py` — lifecycle (start/tick/end), `asyncio.gather` over 4 traders, clock, liquidation, per-trader event streams.
 - `backend/arena/config.json` — trader names + models + reasoning + max_tokens.
 
-### Phase 5 — Integration test
-- End-to-end short arena run (e.g. 2 minutes instead of 60) driven from pytest, no API/UI layer yet.
-- Validates: 4 traders run concurrently, make trades, get liquidated at end, P&Ls persisted to history table.
-- Unit tests written alongside each earlier phase; this phase is where we prove the whole backend works together.
+### Phase 5 — Integration test ✅ complete
+- `backend/test/test_arena_integration.py` — 90s real arena, 4 traders on `openai/gpt-oss-120b` via OpenRouter, live Massive prices, real MCPs. Opt-in via the `integration` pytest marker (`uv run pytest -m integration`) so the default suite stays fast.
+- Passed in 95s on the first run: 4 concurrent trader tasks, mid-arena tick snapshots, end-of-game liquidation to cash, exactly 1 row in `games` history, events from all 4 traders flowing through the arena queue (including `cycle_start`).
 
 ### Phase 6 — API layer
 - FastAPI app: `POST /arena/start`, `POST /arena/stop`, `POST /arena/tick`, `GET /arena/stream` (SSE).
