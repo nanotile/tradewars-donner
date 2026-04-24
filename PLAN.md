@@ -224,10 +224,13 @@ Each phase must validate before moving to the next — small, incremental steps.
 - **`max_tokens` default:** `64_000` across all traders to avoid truncation at xhigh reasoning (xhigh reserves ~95% as thinking budget). Tunable per-trader in `config.json`.
 - **Note:** `thinking: {type: "enabled", ...}` (Anthropic's native field) does NOT pass through OpenRouter's OpenAI-compat layer. Use the unified `reasoning: {effort: ...}` form.
 
-### Phase 3 — Game tools
-- `get_state(ctx)` and `trade(ctx, ticker, quantity)` as Agents SDK function tools.
-- Use the `ctx` object to carry `trader_id`.
-- Unit tests + a prototype run where the agent uses them.
+### Phase 3 — Game tools ✅ complete
+- `backend/traders/tools.py` — `TraderContext` dataclass (trader_id, accounts, prices, clock, rival_ids) carried through `RunContextWrapper.context`. Plain-async `get_state_impl` / `trade_impl` keep the logic directly testable; `@function_tool`-wrapped `get_state` / `trade` are the agent-facing surface.
+- `get_state` returns time elapsed/remaining, cash, holdings with per-position avg_cost/current_price/market_value/unrealized_pnl, total portfolio value, total P&L, and each rival's total portfolio value (only the total — no rival holdings leaked).
+- `trade(ticker, quantity)` fills synchronously at the current Massive quote. Positive buys, negative sells, fractional allowed, no shorting. Returns a structured `{success, ticker, quantity, price, side, cash_after}` on success or `{success: False, error}` on insufficient cash / oversell / zero quantity.
+- `backend/test/test_tools.py` — 12 tests with a `FakePrices` stub (no network).
+- `backend/traders/prototype_tools.py` — integration prototype: real Agent, live Massive prices, in-memory DB, post-run assertions confirm trades actually mutated state.
+- Test suite: 38/38 green.
 
 ### Phase 4 — Trader + arena
 - `backend/traders/trader.py` — single-trader decision-cycle loop (runs until arena signals end).
@@ -259,7 +262,7 @@ Each phase must validate before moving to the next — small, incremental steps.
 ### Phase 9 — Scripts + polish
 - `scripts/start_mac.sh`, `scripts/stop_mac.sh`.
 - Final end-to-end test of a full 1-hour arena via the container.
-- **Delete throwaway probe scripts** from Phase 2: `backend/traders/prototype.py`, `backend/traders/reasoning_probe.py`, `backend/traders/native_probe.py`. Their lessons are already captured in CLAUDE.md and PLAN.md.
+- **Delete throwaway probe scripts** from Phases 2–3: `backend/traders/prototype.py`, `backend/traders/reasoning_probe.py`, `backend/traders/native_probe.py`, `backend/traders/prototype_tools.py`. Their lessons are already captured in CLAUDE.md and PLAN.md.
 
 ### Deferred (future phases)
 - Playwright MCP integration for web browsing.
