@@ -205,3 +205,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Tradewars local state
+backend/environment/*.sqlite
+backend/environment/*.sqlite-journal
+backend/environment/memory/

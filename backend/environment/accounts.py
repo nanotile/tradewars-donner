@@ -1,186 +1,215 @@
-from pydantic import BaseModel
+"""Trader account state backed by SQLite.
+
+One row per trader in `accounts`, one row per held position in `holdings`,
+append-only `trades` and `games` tables. All quantities are fractional (REAL).
+"""
+
+from __future__ import annotations
+
 import json
-from dotenv import load_dotenv
-from datetime import datetime
-from market import get_share_price
-from database import write_account, read_account, write_log
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
 
-load_dotenv(override=True)
+INITIAL_BALANCE = 1_000_000.0
 
-INITIAL_BALANCE = 10_000.0
-SPREAD = 0.002
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS accounts (
+    trader_id TEXT PRIMARY KEY,
+    cash REAL NOT NULL,
+    initial_balance REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS holdings (
+    trader_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    quantity REAL NOT NULL,
+    avg_cost REAL NOT NULL,
+    PRIMARY KEY (trader_id, ticker)
+);
+
+CREATE TABLE IF NOT EXISTS trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trader_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    quantity REAL NOT NULL,
+    price REAL NOT NULL,
+    ts TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS games (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL,
+    ended_at TEXT NOT NULL,
+    duration_seconds REAL NOT NULL,
+    final_results TEXT NOT NULL
+);
+"""
 
 
-class Transaction(BaseModel):
-    symbol: str
-    quantity: int
-    price: float
-    timestamp: str
-    rationale: str
-
-    def total(self) -> float:
-        return self.quantity * self.price
-    
-    def __repr__(self):
-        return f"{abs(self.quantity)} shares of {self.symbol} at {self.price} each."
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
-class Account(BaseModel):
-    name: str
-    balance: float
-    strategy: str
-    holdings: dict[str, int]
-    transactions: list[Transaction]
-    portfolio_value_time_series: list[tuple[str, float]]
+class Accounts:
+    """Thin SQLite-backed store for trader accounts, holdings, trades and game history."""
 
-    @classmethod
-    def get(cls, name: str):
-        fields = read_account(name.lower())
-        if not fields:
-            fields = {
-                "name": name.lower(),
-                "balance": INITIAL_BALANCE,
-                "strategy": "",
-                "holdings": {},
-                "transactions": [],
-                "portfolio_value_time_series": []
-            }
-            write_account(name, fields)
-        return cls(**fields)
-    
-    
-    def save(self):
-        write_account(self.name.lower(), self.model_dump())
+    def __init__(self, db_path: str | Path = ":memory:"):
+        self.db_path = str(db_path)
+        self.conn = sqlite3.connect(self.db_path)
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(SCHEMA)
+        self.conn.commit()
 
-    def reset(self, strategy: str):
-        self.balance = INITIAL_BALANCE
-        self.strategy = strategy
-        self.holdings = {}
-        self.transactions = []
-        self.portfolio_value_time_series = []
-        self.save()
+    def close(self) -> None:
+        self.conn.close()
 
-    def deposit(self, amount: float):
-        """ Deposit funds into the account. """
-        if amount <= 0:
-            raise ValueError("Deposit amount must be positive.")
-        self.balance += amount
-        print(f"Deposited ${amount}. New balance: ${self.balance}")
-        self.save()
+    def reset_working_state(self) -> None:
+        """Wipe accounts, holdings, trades. Leaves `games` history intact."""
+        with self.conn:
+            self.conn.execute("DELETE FROM accounts")
+            self.conn.execute("DELETE FROM holdings")
+            self.conn.execute("DELETE FROM trades")
 
-    def withdraw(self, amount: float):
-        """ Withdraw funds from the account, ensuring it doesn't go negative. """
-        if amount > self.balance:
-            raise ValueError("Insufficient funds for withdrawal.")
-        self.balance -= amount
-        print(f"Withdrew ${amount}. New balance: ${self.balance}")
-        self.save()
+    def create_trader(self, trader_id: str, initial: float = INITIAL_BALANCE) -> None:
+        with self.conn:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO accounts (trader_id, cash, initial_balance) VALUES (?, ?, ?)",
+                (trader_id, initial, initial),
+            )
 
-    def buy_shares(self, symbol: str, quantity: int, rationale: str) -> str:
-        """ Buy shares of a stock if sufficient funds are available. """
-        price = get_share_price(symbol)
-        buy_price = price * (1 + SPREAD)
-        total_cost = buy_price * quantity
-        
-        if total_cost > self.balance:
-            raise ValueError("Insufficient funds to buy shares.")
-        elif price==0:
-            raise ValueError(f"Unrecognized symbol {symbol}")
-        
-        # Update holdings
-        self.holdings[symbol] = self.holdings.get(symbol, 0) + quantity
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        # Record transaction
-        transaction = Transaction(symbol=symbol, quantity=quantity, price=buy_price, timestamp=timestamp, rationale=rationale)
-        self.transactions.append(transaction)
-        
-        # Update balance
-        self.balance -= total_cost
-        self.save()
-        write_log(self.name, "account", f"Bought {quantity} of {symbol}")
-        return "Completed. Latest details:\n" + self.report()
+    def cash(self, trader_id: str) -> float:
+        row = self.conn.execute(
+            "SELECT cash FROM accounts WHERE trader_id = ?", (trader_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"Unknown trader: {trader_id}")
+        return float(row["cash"])
 
-    def sell_shares(self, symbol: str, quantity: int, rationale: str) -> str:
-        """ Sell shares of a stock if the user has enough shares. """
-        if self.holdings.get(symbol, 0) < quantity:
-            raise ValueError(f"Cannot sell {quantity} shares of {symbol}. Not enough shares held.")
-        
-        price = get_share_price(symbol)
-        sell_price = price * (1 - SPREAD)
-        total_proceeds = sell_price * quantity
-        
-        # Update holdings
-        self.holdings[symbol] -= quantity
-        
-        # If shares are completely sold, remove from holdings
-        if self.holdings[symbol] == 0:
-            del self.holdings[symbol]
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        # Record transaction
-        transaction = Transaction(symbol=symbol, quantity=-quantity, price=sell_price, timestamp=timestamp, rationale=rationale)  # negative quantity for sell
-        self.transactions.append(transaction)
+    def initial_balance(self, trader_id: str) -> float:
+        row = self.conn.execute(
+            "SELECT initial_balance FROM accounts WHERE trader_id = ?", (trader_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"Unknown trader: {trader_id}")
+        return float(row["initial_balance"])
 
-        # Update balance
-        self.balance += total_proceeds
-        self.save()
-        write_log(self.name, "account", f"Sold {quantity} of {symbol}")
-        return "Completed. Latest details:\n" + self.report()
+    def holdings(self, trader_id: str) -> dict[str, dict[str, float]]:
+        """Returns {ticker: {"quantity": q, "avg_cost": c}}."""
+        rows = self.conn.execute(
+            "SELECT ticker, quantity, avg_cost FROM holdings WHERE trader_id = ?",
+            (trader_id,),
+        ).fetchall()
+        return {
+            r["ticker"]: {"quantity": float(r["quantity"]), "avg_cost": float(r["avg_cost"])}
+            for r in rows
+        }
 
-    def calculate_portfolio_value(self):
-        """ Calculate the total value of the user's portfolio. """
-        total_value = self.balance
-        for symbol, quantity in self.holdings.items():
-            total_value += get_share_price(symbol) * quantity
-        return total_value
+    def trades(self, trader_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT ticker, quantity, price, ts FROM trades WHERE trader_id = ? ORDER BY id",
+            (trader_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
-    def calculate_profit_loss(self, portfolio_value: float):
-        """ Calculate profit or loss from the initial spend. """
-        initial_spend = sum(transaction.total() for transaction in self.transactions)
-        return portfolio_value - initial_spend - self.balance
+    def execute_trade(
+        self, trader_id: str, ticker: str, quantity: float, price: float
+    ) -> None:
+        """Buy if quantity > 0, sell if quantity < 0. Fractional allowed. No shorting."""
+        if quantity == 0:
+            raise ValueError("Quantity must be non-zero")
+        if price <= 0:
+            raise ValueError("Price must be positive")
+        ticker = ticker.upper()
 
-    def get_holdings(self):
-        """ Report the current holdings of the user. """
-        return self.holdings
+        cash = self.cash(trader_id)
+        holdings = self.holdings(trader_id)
+        current = holdings.get(ticker, {"quantity": 0.0, "avg_cost": 0.0})
+        cur_qty = current["quantity"]
+        cur_avg = current["avg_cost"]
 
-    def get_profit_loss(self):
-        """ Report the user's profit or loss at any point in time. """
-        return self.calculate_profit_loss()
+        if quantity > 0:
+            cost = quantity * price
+            if cost > cash:
+                raise ValueError(
+                    f"Insufficient cash: need {cost:.2f}, have {cash:.2f}"
+                )
+            new_qty = cur_qty + quantity
+            new_avg = (cur_qty * cur_avg + quantity * price) / new_qty
+            new_cash = cash - cost
+        else:
+            sell_qty = -quantity
+            if sell_qty > cur_qty + 1e-9:
+                raise ValueError(
+                    f"Cannot sell {sell_qty} of {ticker}: only hold {cur_qty}"
+                )
+            new_qty = cur_qty - sell_qty
+            new_avg = cur_avg  # avg cost basis unchanged on partial sell
+            new_cash = cash + sell_qty * price
 
-    def list_transactions(self):
-        """ List all transactions made by the user. """
-        return [transaction.model_dump() for transaction in self.transactions]
-    
-    def report(self) -> str:
-        """ Return a json string representing the account.  """
-        portfolio_value = self.calculate_portfolio_value()
-        self.portfolio_value_time_series.append((datetime.now().strftime("%Y-%m-%d %H:%M:%S"), portfolio_value))
-        self.save()
-        pnl = self.calculate_profit_loss(portfolio_value)
-        data = self.model_dump()
-        data["total_portfolio_value"] = portfolio_value
-        data["total_profit_loss"] = pnl
-        write_log(self.name, "account", f"Retrieved account details")
-        return json.dumps(data)
-    
-    def get_strategy(self) -> str:
-        """ Return the strategy of the account """
-        write_log(self.name, "account", f"Retrieved strategy")
-        return self.strategy
-    
-    def change_strategy(self, strategy: str) -> str:
-        """ At your discretion, if you choose to, call this to change your investment strategy for the future """
-        self.strategy = strategy
-        self.save()
-        write_log(self.name, "account", f"Changed strategy")
-        return "Changed strategy"
+        with self.conn:
+            self.conn.execute(
+                "UPDATE accounts SET cash = ? WHERE trader_id = ?",
+                (new_cash, trader_id),
+            )
+            if new_qty <= 1e-9:
+                self.conn.execute(
+                    "DELETE FROM holdings WHERE trader_id = ? AND ticker = ?",
+                    (trader_id, ticker),
+                )
+            else:
+                self.conn.execute(
+                    """
+                    INSERT INTO holdings (trader_id, ticker, quantity, avg_cost)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(trader_id, ticker) DO UPDATE
+                    SET quantity = excluded.quantity, avg_cost = excluded.avg_cost
+                    """,
+                    (trader_id, ticker, new_qty, new_avg),
+                )
+            self.conn.execute(
+                "INSERT INTO trades (trader_id, ticker, quantity, price, ts) VALUES (?, ?, ?, ?, ?)",
+                (trader_id, ticker, quantity, price, _now()),
+            )
 
-# Example of usage:
-if __name__ == "__main__":
-    account = Account("John Doe")
-    account.deposit(1000)
-    account.buy_shares("AAPL", 5)
-    account.sell_shares("AAPL", 2)
-    print(f"Current Holdings: {account.get_holdings()}")
-    print(f"Total Portfolio Value: {account.calculate_portfolio_value()}")
-    print(f"Profit/Loss: {account.get_profit_loss()}")
-    print(f"Transactions: {account.list_transactions()}")
+    def portfolio_value(
+        self, trader_id: str, prices: dict[str, float]
+    ) -> float:
+        """Cash + sum(quantity * current_price). `prices` must cover every held ticker."""
+        value = self.cash(trader_id)
+        for ticker, pos in self.holdings(trader_id).items():
+            if ticker not in prices:
+                raise KeyError(f"No price for held ticker: {ticker}")
+            value += pos["quantity"] * prices[ticker]
+        return value
+
+    def pnl(self, trader_id: str, portfolio_value: float) -> float:
+        return portfolio_value - self.initial_balance(trader_id)
+
+    def record_game(
+        self,
+        started_at: str,
+        ended_at: str,
+        duration_seconds: float,
+        final_results: dict[str, float],
+    ) -> int:
+        with self.conn:
+            cur = self.conn.execute(
+                """
+                INSERT INTO games (started_at, ended_at, duration_seconds, final_results)
+                VALUES (?, ?, ?, ?)
+                """,
+                (started_at, ended_at, duration_seconds, json.dumps(final_results)),
+            )
+            return int(cur.lastrowid)
+
+    def list_games(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT id, started_at, ended_at, duration_seconds, final_results FROM games ORDER BY id DESC"
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["final_results"] = json.loads(d["final_results"])
+            out.append(d)
+        return out
