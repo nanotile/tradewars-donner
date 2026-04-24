@@ -30,50 +30,42 @@ class TraderContext:
     rival_ids: list[str] = field(default_factory=list)
 
 
+def holding_detail(pos: dict[str, float], price: float) -> dict[str, float]:
+    """Enrich a stored position with current market value and unrealized P&L."""
+    market_value = pos["quantity"] * price
+    return {
+        "quantity": pos["quantity"],
+        "avg_cost": pos["avg_cost"],
+        "current_price": price,
+        "market_value": market_value,
+        "unrealized_pnl": market_value - pos["quantity"] * pos["avg_cost"],
+    }
+
+
 async def get_state_impl(tc: TraderContext) -> dict[str, Any]:
     """Compute a full state snapshot for the given trader context."""
     now = datetime.now(timezone.utc)
     elapsed = (now - tc.started_at).total_seconds()
-    remaining = max(0.0, tc.duration_seconds - elapsed)
 
     own_holdings = tc.accounts.holdings(tc.trader_id)
-    rivals_holdings = {rid: tc.accounts.holdings(rid) for rid in tc.rival_ids}
-
     tickers = set(own_holdings)
-    for h in rivals_holdings.values():
-        tickers.update(h)
+    for rid in tc.rival_ids:
+        tickers.update(tc.accounts.holdings(rid))
     current_prices = await tc.prices.aget_prices(sorted(tickers)) if tickers else {}
 
-    holdings_detail: dict[str, dict[str, float]] = {}
-    for ticker, pos in own_holdings.items():
-        price = current_prices[ticker]
-        market_value = pos["quantity"] * price
-        unrealized_pnl = market_value - pos["quantity"] * pos["avg_cost"]
-        holdings_detail[ticker] = {
-            "quantity": pos["quantity"],
-            "avg_cost": pos["avg_cost"],
-            "current_price": price,
-            "market_value": market_value,
-            "unrealized_pnl": unrealized_pnl,
-        }
-
     own_value = tc.accounts.portfolio_value(tc.trader_id, current_prices)
-    own_pnl = tc.accounts.pnl(tc.trader_id, own_value)
-
-    rivals = {
-        rid: tc.accounts.portfolio_value(rid, current_prices)
-        for rid in tc.rival_ids
-    }
 
     return {
         "trader_id": tc.trader_id,
         "time_elapsed_seconds": round(elapsed, 1),
-        "time_remaining_seconds": round(remaining, 1),
+        "time_remaining_seconds": round(max(0.0, tc.duration_seconds - elapsed), 1),
         "cash": tc.accounts.cash(tc.trader_id),
-        "holdings": holdings_detail,
+        "holdings": {t: holding_detail(p, current_prices[t]) for t, p in own_holdings.items()},
         "total_portfolio_value": own_value,
-        "total_pnl": own_pnl,
-        "rivals_total_portfolio_value": rivals,
+        "total_pnl": tc.accounts.pnl(tc.trader_id, own_value),
+        "rivals_total_portfolio_value": {
+            rid: tc.accounts.portfolio_value(rid, current_prices) for rid in tc.rival_ids
+        },
     }
 
 

@@ -42,7 +42,7 @@ def make_massive_mcp() -> MCPServerStdio:
         params={
             "command": "mcp_massive",
             "args": [],
-            "env": {**os.environ, "MASSIVE_API_KEY": os.environ["MASSIVE_API_KEY"]},
+            "env": dict(os.environ),  # MASSIVE_API_KEY is read from here
         },
         cache_tools_list=True,
         client_session_timeout_seconds=_MCP_INIT_TIMEOUT,

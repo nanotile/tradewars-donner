@@ -28,6 +28,10 @@ from backend.traders.tools import TraderContext, get_state, trade
 logger = logging.getLogger(__name__)
 
 MAX_TURNS_PER_CYCLE = 40
+RATIONALE_MAX_CHARS = 800
+TOOL_OUTPUT_PREVIEW_CHARS = 2000
+INTER_CYCLE_SLEEP_SECONDS = 0.05
+ERROR_BACKOFF_SECONDS = 2.0
 
 
 def _now() -> str:
@@ -81,14 +85,14 @@ class Trader:
             async for event in result.stream_events():
                 await self._forward_sdk_event(event)
 
-            rationale = result.final_output or ""
-            self.previous_rationale = rationale.strip()[:800]
+            rationale = (result.final_output or "").strip()
+            self.previous_rationale = rationale[:RATIONALE_MAX_CHARS]
             await self._emit("cycle_end", {"cycle": self.cycle_count, "rationale": self.previous_rationale})
 
         except Exception as e:
             logger.exception("cycle %s failed for %s", self.cycle_count, self.config.id)
             await self._emit("error", {"cycle": self.cycle_count, "error": f"{type(e).__name__}: {e}"})
-            await asyncio.sleep(2)
+            await asyncio.sleep(ERROR_BACKOFF_SECONDS)
 
     async def _forward_sdk_event(self, event: Any) -> None:
         if event.type != "run_item_stream_event":
@@ -102,7 +106,7 @@ class Trader:
             })
         elif name == "tool_output":
             out = raw.get("output") if isinstance(raw, dict) else getattr(raw, "output", None)
-            await self._emit("tool_output", {"output": str(out)[:2000]})
+            await self._emit("tool_output", {"output": str(out)[:TOOL_OUTPUT_PREVIEW_CHARS]})
         elif name == "message_output_created":
             content = getattr(raw, "content", None) or []
             texts = [getattr(p, "text", None) for p in content]
@@ -126,4 +130,4 @@ class Trader:
                 await self._run_one_cycle(agent)
                 if stop_event.is_set():
                     break
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(INTER_CYCLE_SLEEP_SECONDS)

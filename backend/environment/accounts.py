@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 INITIAL_BALANCE = 1_000_000.0
+EPSILON = 1e-9  # float quantity tolerance after SQLite round-trips
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS accounts (
@@ -139,7 +140,7 @@ class Accounts:
             new_cash = cash - cost
         else:
             sell_qty = -quantity
-            if sell_qty > cur_qty + 1e-9:
+            if sell_qty > cur_qty + EPSILON:
                 raise ValueError(
                     f"Cannot sell {sell_qty} of {ticker}: only hold {cur_qty}"
                 )
@@ -152,7 +153,7 @@ class Accounts:
                 "UPDATE accounts SET cash = ? WHERE trader_id = ?",
                 (new_cash, trader_id),
             )
-            if new_qty <= 1e-9:
+            if new_qty <= EPSILON:
                 self.conn.execute(
                     "DELETE FROM holdings WHERE trader_id = ? AND ticker = ?",
                     (trader_id, ticker),
@@ -207,9 +208,7 @@ class Accounts:
         rows = self.conn.execute(
             "SELECT id, started_at, ended_at, duration_seconds, final_results FROM games ORDER BY id DESC"
         ).fetchall()
-        out = []
-        for r in rows:
-            d = dict(r)
-            d["final_results"] = json.loads(d["final_results"])
-            out.append(d)
-        return out
+        return [
+            {**dict(r), "final_results": json.loads(r["final_results"])}
+            for r in rows
+        ]

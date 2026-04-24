@@ -13,25 +13,24 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from backend.environment.accounts import Accounts
 from backend.environment.prices import Prices
 from backend.traders.mcp_servers import wipe_memory_files
 from backend.traders.models import TraderConfig
-from backend.traders.tools import TraderContext
+from backend.traders.tools import TraderContext, holding_detail
 from backend.traders.trader import Trader, TraderEvent
 
 logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = REPO_ROOT / "backend" / "arena" / "config.json"
-DEFAULT_DB_PATH = REPO_ROOT / "backend" / "environment" / "tradewars.sqlite"
 
-LIQUIDATION_TIMEOUT_SECONDS = 30.0
+SHUTDOWN_TIMEOUT_SECONDS = 30.0
 
 
 def _now() -> datetime:
@@ -129,20 +128,19 @@ class Arena:
 
         self.stop_event.set()
 
-        # Allow in-flight cycles to settle; then cancel anything still running.
+        # Give in-flight cycles a chance to finish; cancel stragglers.
+        _done, pending = await asyncio.wait(
+            self._tasks, timeout=SHUTDOWN_TIMEOUT_SECONDS
+        )
+        for task in pending:
+            task.cancel()
         for task in self._tasks:
             try:
-                await asyncio.wait_for(
-                    asyncio.shield(task),
-                    timeout=LIQUIDATION_TIMEOUT_SECONDS,
-                )
-            except asyncio.TimeoutError:
-                task.cancel()
+                await task
+            except asyncio.CancelledError:
+                pass
             except Exception:
                 logger.exception("trader task raised on shutdown")
-        for task in self._tasks:
-            if not task.done():
-                task.cancel()
 
         await self._liquidate_all()
 
@@ -161,27 +159,21 @@ class Arena:
             return self._final_snapshot
         return await self._snapshot(running=True)
 
-    async def _snapshot(self, *, running: bool) -> ArenaSnapshot:
+    def _all_held_tickers(self) -> set[str]:
         tickers: set[str] = set()
         for cfg in self.config.traders:
             tickers.update(self.accounts.holdings(cfg.id))
+        return tickers
+
+    async def _snapshot(self, *, running: bool) -> ArenaSnapshot:
+        tickers = self._all_held_tickers()
         current = await self.prices.aget_prices(sorted(tickers)) if tickers else {}
         self._last_prices.update(current)
 
-        traders_snap: list[TraderSnapshot] = []
+        traders_snap = []
         for cfg in self.config.traders:
             holdings = self.accounts.holdings(cfg.id)
-            detail: dict[str, dict[str, float]] = {}
-            for ticker, pos in holdings.items():
-                price = current[ticker]
-                market_value = pos["quantity"] * price
-                detail[ticker] = {
-                    "quantity": pos["quantity"],
-                    "avg_cost": pos["avg_cost"],
-                    "current_price": price,
-                    "market_value": market_value,
-                    "unrealized_pnl": market_value - pos["quantity"] * pos["avg_cost"],
-                }
+            detail = {t: holding_detail(p, current[t]) for t, p in holdings.items()}
             value = self.accounts.portfolio_value(cfg.id, current)
             traders_snap.append(TraderSnapshot(
                 trader_id=cfg.id,
@@ -205,12 +197,9 @@ class Arena:
     # ---- liquidation / history ----
 
     async def _liquidate_all(self) -> None:
-        # Gather all tickers held across all traders, fetch current prices once,
-        # then execute a sell per holding. Missing prices fall back to the most
-        # recent tick price (per PLAN).
-        tickers: set[str] = set()
-        for cfg in self.config.traders:
-            tickers.update(self.accounts.holdings(cfg.id))
+        """Sell every open position at current price, falling back to the last
+        tick price cache if the live lookup fails (per PLAN)."""
+        tickers = self._all_held_tickers()
         if not tickers:
             return
 
@@ -222,7 +211,9 @@ class Arena:
 
         for cfg in self.config.traders:
             for ticker, pos in list(self.accounts.holdings(cfg.id).items()):
-                price = fresh.get(ticker) or self._last_prices.get(ticker)
+                price = fresh.get(ticker)
+                if price is None:
+                    price = self._last_prices.get(ticker)
                 if price is None:
                     logger.error("no price for %s during liquidation; skipping", ticker)
                     continue
@@ -250,8 +241,7 @@ class Arena:
 
     # ---- streaming ----
 
-    async def stream(self) -> Any:
+    async def stream(self) -> AsyncIterator[TraderEvent]:
         """Yield TraderEvents as they arrive. Intended for the SSE endpoint."""
         while True:
-            event = await self.events.get()
-            yield event
+            yield await self.events.get()
