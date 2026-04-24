@@ -2,110 +2,253 @@
 
 ## Introduction
 
-This project will be a battle arena for 4 LLM Agents (the "traders") to compete in a simulated equity trading environment, day trading with a 1 hour time limit. The project will be developed by Claude Code.
+A battle arena for 4 LLM agents (the "traders") to compete in a simulated equity day-trading environment over a 1-hour time limit. Developed with Claude Code.
 
 ## Rules
 
-During the 1 hour of the gane, the traders can buy/sell equities. They cannot short sell.
-The traders each start with $1,000,000 and they can trade in fractional shares. There's no commission or bid/offer spread.
+- Game length: 1 hour, wall-clock.
+- Each trader starts with $1,000,000.
+- Fractional shares allowed. No short selling.
+- No commission, no bid/offer spread, **no slippage** — any order, regardless of size or ticker liquidity, fills entirely at the latest Massive quote.
+- Assume the US market is open (or after-hours, which Massive supports). No special handling for closed markets in v1.
+- At the end of the hour, the arena auto-liquidates all open positions at the latest Massive quote so each trader ends in 100% cash. Traders are told this in their initial prompt.
 
 ## Traders
 
-The traders will be developed using OpenAI Agents SDK.
-The traders will have access to the Massive MCP Server (formerly known as Polygon.io). This will give them access to realtime and historic equity prices, news information, and technical and fundamental analysis. They will have access to a Playwright MCP Server for browsing the web if they wish to.
-The traders will be prompted that this is a simulation, and that they are in competition with 3 other traders.
-They will be run in an Agent Loop with access to the MCP Servers and some tools:
-(a) get_state() will provide the time elapsed, time to go, total portfolio value, cash balance, holdings, P&L. They will also receive the portfolio value of the other traders.
-(b) trade(ticker, quantity) will buy/sell a ticker with negative quantity
+### Models (all via OpenAI Agents SDK)
 
-OpenAI Agents SDK will be used for each of the traders.
+The OpenAI Agents SDK has first-class LLM abstractions and a LiteLLM-based fallback. We use the SDK's native integrations uniformly for all four models, falling back to LiteLLM only if needed.
+
+| # | Trader | Model | Reasoning |
+|---|--------|-------|-----------|
+| 1 | Claude | `claude-opus-4-7` (Anthropic) | max |
+| 2 | OpenAI | `gpt-5.4` (OpenAI) | xhigh |
+| 3 | Kimi | `moonshot/kimi-k2.6` (OpenRouter) | highest |
+| 4 | DeepSeek | `deepseek/deepseek-v4-pro` (OpenRouter) | highest |
+
+Note: DeepSeek V4 Pro was released today (2026-04-24) and may still be provisioning providers on OpenRouter. Handle provider-unavailable gracefully.
+
+Reasoning-effort passthrough differs by provider. We'll use the Agents SDK's model settings / extra-body mechanism per model. If the SDK native path can't express a given provider's knob, we fall back to LiteLLM for that trader only.
+
+**Target maximum reasoning per provider:**
+- Claude Opus 4.7 → Anthropic's new `"max"` thinking mode.
+- GPT 5.4 → OpenAI's `"xhigh"` reasoning effort.
+- Kimi K2.6 → OpenRouter's highest available for that model.
+- DeepSeek V4 Pro → OpenRouter's highest available for that model.
+
+Exact knob names and values will be verified against current provider docs during Phase 2 (see Build Phases). Anthropic also requires `max_tokens` — set per trader in config to a large value (e.g. 32k).
+
+### MCP servers
+
+- **Massive MCP** (official stdio server, formerly Polygon.io). Latest version is the short/simple one. Provides realtime + historic equity prices, news, technical and fundamental analysis. `MASSIVE_API_KEY` from `.env`.
+- **Memory MCP** (official Anthropic `@modelcontextprotocol/server-memory` — knowledge-graph memory: entities, relations, observations). One stdio instance **per trader**, each with an isolated storage file at `backend/environment/memory/trader_{id}.json` (set via `MEMORY_FILE_PATH` env var). Memory files are **wiped on arena Start** (consistent with the account tables) and `.gitignore`d. This gives each model persistent state across decision cycles within a game — a natural complement to the compact rolling memory we inject into each cycle.
+- **Playwright MCP — deferred.** Dropped from v1 to keep the Docker image slim for future fly.io deployment (Chromium-in-container is heavy and awkward on fly). Re-add later if web browsing proves valuable.
+
+### Tools exposed to each trader
+
+- `get_state()` → time elapsed, time remaining, own total portfolio value, own cash, own holdings with per-position P&L, own total P&L, and **only the total portfolio value** of each rival (to stoke competition without leaking rivals' holdings).
+- `trade(ticker, quantity)` → positive = buy, negative = sell. Fills synchronously at the current Massive quote.
+
+### Agent loop
+
+- Each trader runs a **continuous async loop** (not tick-driven). LLMs spend most of their time thinking, so a tight loop is fine.
+- All 4 loops run concurrently via `asyncio.gather`.
+- The arena holds a cancellation signal; loops check it between iterations and on clock end.
+- On error mid-loop: log it, short sleep, continue. Don't kill the trader.
+- **No per-iteration safety cap**, but Anthropic's API requires `max_tokens` — we set it per-model in the trader config (sensible default, large enough not to bite).
+
+### Decision-cycle architecture (solves context growth + `final_output`)
+
+A naive "one giant conversation" approach hits two problems: (a) context grows unboundedly over an hour of tool calls, (b) the Agents SDK ends a run when the LLM produces a non-tool `final_output`. We handle both with an **episodic decision-cycle loop**:
+
+- One **decision cycle** = one `Runner.run()`. Inside the cycle, the SDK handles the tool-call → tool-result → next-turn loop automatically until the LLM emits a `final_output` (its decision rationale).
+- Between cycles, we **start a fresh `Runner.run()`** — so history does not accumulate across cycles. Context is bounded to one cycle's worth of tool calls.
+- We maintain a compact **rolling memory** per trader, kept outside the Agent, containing:
+  - Recent trades (ticker, qty, price, timestamp) — last ~20.
+  - Previous cycle's `final_output` rationale (1–2 sentences).
+  - Current full `get_state()` snapshot.
+- In addition, each trader has a **persistent memory MCP** (see MCP servers above) for richer state the model curates itself — hypotheses, watchlists, conviction notes, observations about rivals. The rolling memory is *system-curated* and always injected; the MCP memory is *model-curated* and pulled in only when the model chooses. The two don't overlap.
+- Each cycle's input is: system prompt (static) + rolling memory (compact) + "it is now HH:MM:SS into the hour, decide your next move."
+- `final_output` is **expected and fine** — it naturally closes one cycle. The outer loop immediately starts the next cycle.
+- Between cycles, a small configurable delay (default 0s — cycles are already slow due to reasoning).
+
+This keeps each cycle's context small, makes `final_output` a feature not a bug, and exposes natural per-cycle event boundaries for the SSE stream.
+
+### Prompting
+
+- System prompt explains: simulation nature, rivals, rules, $1M start, 1-hour clock, fractional shares allowed, no shorting, auto-liquidation at end, available tools, and MCP servers.
+- Prompt **mentions the memory MCP as a useful tool** for tracking state, hypotheses, and observations across the 1-hour timeline — but does not mandate how to use it.
+- Prompts live in `backend/traders/templates.py`.
 
 ## Use of OpenAI Agents SDK
 
-Use idiomatic, simple OpenAI Agents SDK approaches, consulting the official OpenAI docs.
-Use MCP servers via the context manager as documented.
-Use the OpenAI ctx object to manage the trader_id that is used for get_state() and trade() in a clean and idiomatic way.
-Use async code; stream back each tool call and decision.
+- Idiomatic SDK patterns per the official OpenAI docs.
+- MCP servers via the SDK's async context manager.
+- `trader_id` carried in the Agents SDK `ctx` object, used by `get_state()` and `trade()`.
+- Fully async.
+- Stream every tool call and decision out of the loop (see Streaming below).
+
+### Streaming + traces (Issue 3)
+
+The Agents SDK exposes tool-call events. For MCP sub-tool calls, the per-tool granularity depends on SDK version. Approach:
+1. Investigate whether the current SDK surfaces MCP sub-tool calls cleanly.
+2. If yes: stream them into the trader log with tool name + args summary.
+3. If no: fall back to "MCP server call" granularity for v1. Deeper per-tool tracing via the SDK's custom-traces API is a future enhancement.
 
 ## Architecture
 
-In `backend/environment`:
+```
+tradewars/
+├── backend/
+│   ├── environment/    # accounts DB, Massive REST price lookups
+│   ├── traders/        # mcp_servers.py, trader.py, templates.py
+│   ├── arena/          # arena lifecycle, trader config, start/stop
+│   ├── api/            # FastAPI app (SSE endpoint + tick endpoint)
+│   └── test/           # pytest suite
+├── frontend/           # Vite vanilla TS
+├── scripts/            # start_mac.sh, stop_mac.sh
+├── Dockerfile
+├── .env
+└── PLAN.md
+```
 
-The code to manage the trading accounts of the players in a local database, keyed off the trader_id. There's a reference implementation from a different project in here of `accounts.py` but this should be completely rewritten. And the SQLLite database goes in this directory and needs to be .gitignored.
+### `backend/environment`
 
-The code to make an API call to Massive in order to look up the official equity prices.
-MASSIVE_API_KEY is in the .env file.
+- Accounts persisted in a local SQLite DB keyed by `trader_id`. DB file lives in this directory and is `.gitignore`d.
+- `accounts.py` to be rewritten from scratch (ignore the reference implementation present in this directory).
+- Working account tables are **wiped on every arena Start** — no cross-session portfolio state in v1.
+- A separate append-only **`games` history table** records each completed game: start time, end time, duration, and final per-trader P&L. Not wiped — supports a future "past games" view.
+- Massive REST client for price lookups (used by `trade()` execution and by the per-second tick price refresh). `MASSIVE_API_KEY` from `.env`. No rate-limit concerns — pro plan is effectively unlimited.
 
-In `backend/traders`
+### `backend/traders`
 
-The code to create the MCPStdioServers, perhaps in mcp_servers.py
-The code to run each Agent Loop, perhaps in trader.py
-The prompts in templates.py
+- `mcp_servers.py` — factories for Massive + Playwright stdio MCP servers.
+- `trader.py` — single-trader agent loop.
+- `templates.py` — system/user prompt templates.
 
-In `backend/arena`
+### `backend/arena`
 
-The management code to set up and run the trading floor
-The configuration for the 4 traders
-The code to 'start' the arena at the begining, and to 'end' the arena at the end, which should effectively sell all open positions to end up with a cash number. (The traders should be informed that this will happen in their initial prompt).
+- Arena lifecycle: `start()` resets the working account tables, launches 4 trader tasks via `asyncio.gather`, starts the 1-hour clock. `end()` cancels trader loops, **always liquidates** all open positions at current Massive quotes (manual Stop and auto 60:00 end behave identically), then records final P&Ls to the `games` history table.
+- If Massive cannot return a quote for a held ticker at liquidation (API error, halted symbol), fall back to the **last price observed by the tick loop** for that ticker. Persist a short price cache in memory keyed by ticker, updated every tick.
+- Trader configuration lives in **`backend/arena/config.json`**: display name, model id, provider, reasoning effort, `max_tokens`. Names ("Claude", "GPT", "Kimi", "DeepSeek") drive UI labels and log identity. **All 4 traders share the identical system prompt** — the contest is pure model-vs-model, no persona differentiation.
+- Holds the per-trader event streams consumed by the SSE endpoint.
 
-In `backend/api`
+### `backend/api`
 
-The FastAPI app that will service the frontend.
+- FastAPI.
+- `POST /arena/start` — reset + start.
+- `POST /arena/stop` — manual end.
+- `POST /arena/tick` — UI heartbeat: refresh all portfolio prices from Massive and return current PnL snapshot for all 4 traders.
+- `GET /arena/stream` — **SSE** channel pushing trader events (tool calls, decisions, trades, errors) from all 4 loops.
 
-In `backend/test`
+### `backend/test`
 
-Rigorous testing for everything.
-For testing, it's fine to use a real connection to OpenRouter; the API key is in the .env file and you should use model "openai/gpt-oss-120b" which is cheap.
-It's also fine to use the real Massive API and MASSIVE_API_KEY in the .env file; I have a pro plan.
+- Rigorous pytest coverage.
+- Tests may use the real OpenRouter API (model `openai/gpt-oss-120b`, cheap) and real Massive API with live keys from `.env`.
 
-In `frontend`
+### `frontend` (Vite + vanilla TS)
 
-A simple Vite vanilla TS user interface.
-For simplicity, the UI will drive the process (so we don't need long running backend)
-The UI will have at the top:
-- A 'Start' button to reset portfolios and start the 1 hour, a 'Stop' button to end it (happens automatically after an hour)
-- A large countdown clock counting down the hour
-- A dark mode / light mode switch
+The UI drives the process via 1 Hz ticks so the backend doesn't need a long-running scheduler. **Dark mode is the default**; a toggle switches to light.
 
-Then the UI will be divided into 4 panels for each trader:
+Uses a small chart library (**uPlot**) rather than hand-rolled SVG — stays lightweight, keeps the TS minimal.
 
-Top of the panel: current portfolio value, in large font, green if Profit overall and Red if loss.
-Beneath that, a line chart showing the change in value of the portfolio over the course of the 1 hour, populating gradually from left to right.
-Beneath that, the key facts: Cash, P&L
-Beneath that, a heatmap of the current portfolio holdings with the stock ticker, the size reflects how much is owned, the color represents gain/loss.
-Beneath that, a log trace showing the Trader use of tools and trading decisions (will this even be possible for MCP server use?)
+**Top bar:**
+- Start button (resets portfolios, begins the hour).
+- Stop button (manual end; auto-end at 60:00).
+- Large countdown clock.
+- Dark / light mode switch.
 
-The UI will send 'tick' messages to the server API so that it updates pricing information for all portfolios and responds to the UI to refresh the P&L charts.
+**Body — 2×2 grid, one panel per trader:**
+- Large portfolio-value display, green if P&L ≥ 0 else red.
+- Line chart of portfolio value over the hour, populating left-to-right. Downsample to keep point count bounded (~300 points over the hour, i.e. one point per ~12s averaged from 1 Hz ticks).
+- Key facts: cash, P&L.
+- Heatmap of current holdings — tile size = position value, color = per-position P&L.
+- Bounded log trace (e.g. last 100 entries) of tool calls and decisions, fed by SSE.
 
-### Color Scheme
-- Accent Yellow: `#ecad0a`
-- Blue Primary: `#209dd7`
-- Purple Secondary: `#753991` (submit buttons)
-- And elegant shades of greys. Avoid overuse of gradients and other LLM-generated tells. Never any emojis.
+**Tick loop:** UI sends `POST /arena/tick` every 1 second. Tick refreshes prices for all unique tickers across all 4 portfolios and returns the updated snapshot; UI appends to each chart and redraws.
 
-In `scripts`
+**Streaming:** UI opens a single SSE connection to `/arena/stream` on Start; appends each event to the correct trader's log panel.
 
-`start_mac.sh`
-and
-`stop_mac.sh`
+### Color scheme
 
-That starts up a docker container (described by a single Dockerfile in the project root) that contains a statically compiled frontend served at / and the backend in a uv project
+- Accent yellow: `#ecad0a`
+- Blue primary: `#209dd7`
+- Purple secondary: `#753991` (submit buttons)
+- Elegant greys otherwise. Avoid gradient overuse and other LLM-aesthetic tells. No emojis anywhere.
 
-## Questions / issues
+### `scripts`
 
-### Issue 1
+- `start_mac.sh` — build + run the Docker container.
+- `stop_mac.sh` — stop the container.
+- Single `Dockerfile` at the project root. Statically compiled frontend served at `/`; backend is a uv project.
 
-The initial LLMs to support for trading are:
-Claude Opus 4.7 on Max reasoning mode
-OpenAI GPT 5.4 on xhigh reasoning mode
-And 2 other models via OpenRouter on their highest reasoning mode, 1 of which will be Kimi K2.6.
+## Environment variables (`.env`)
 
-I'm concerned that I don't know how the OpenAI Agents SDK will support the passthrough of parameters to ensure that LLMs are on the maximum reasoning effort; I suspect this is handled differently for OpenAI, Anthropic and OpenRouter.
+- `MASSIVE_API_KEY` — Massive / Polygon.
+- `OPENAI_API_KEY` — GPT 5.4.
+- `ANTHROPIC_API_KEY` — Claude Opus 4.7.
+- `OPENROUTER_API_KEY` — Kimi K2.6 and DeepSeek V4 Pro.
 
-### Issue 2
+## Build phases
 
-I want to be able to stream back results from the Agent Loops all the way to the UI, but I don't know if this is technically possible.
+Each phase must validate before moving to the next — small, incremental steps.
 
-### Issue 3
+### Phase 1 — Preliminaries
+- Rewrite `backend/environment/accounts.py` from scratch (keyed by `trader_id`, supports buy/sell fractional, P&L, holdings, cash).
+- SQLite schema + migrations-lite (simple create-if-not-exists).
+- `games` history table.
+- Massive REST client for equity prices.
+- Unit tests for both. Run `uv run pytest` green before Phase 2.
 
-I'd like the use of MCP servers to be recorded in the Trader log, but that might not be possible
+### Phase 2 — OpenAI Agents SDK prototyping
+- Single-trader standalone prototype (no arena, no UI) running one decision cycle.
+- Wire in the Massive MCP + Memory MCP via the SDK's async context manager.
+- **Confirm the agent can**: (a) get realtime prices, (b) get news, (c) get technical + fundamental data, (d) read/write memory.
+- **Nail down reasoning-effort passthrough for each of the 4 production models** — one at a time, verify via a debug print of the outbound request. This is the highest-risk unknown.
+- Confirm streaming events expose tool calls (for the future SSE log).
+
+### Phase 3 — Game tools
+- `get_state(ctx)` and `trade(ctx, ticker, quantity)` as Agents SDK function tools.
+- Use the `ctx` object to carry `trader_id`.
+- Unit tests + a prototype run where the agent uses them.
+
+### Phase 4 — Trader + arena
+- `backend/traders/trader.py` — single-trader decision-cycle loop (runs until arena signals end).
+- `backend/traders/mcp_servers.py` — per-trader MCP factories.
+- `backend/traders/templates.py` — shared system prompt.
+- `backend/arena/arena.py` — lifecycle (start/tick/end), `asyncio.gather` over 4 traders, clock, liquidation, per-trader event streams.
+- `backend/arena/config.json` — trader names + models + reasoning + max_tokens.
+
+### Phase 5 — Integration test
+- End-to-end short arena run (e.g. 2 minutes instead of 60) driven from pytest, no API/UI layer yet.
+- Validates: 4 traders run concurrently, make trades, get liquidated at end, P&Ls persisted to history table.
+- Unit tests written alongside each earlier phase; this phase is where we prove the whole backend works together.
+
+### Phase 6 — API layer
+- FastAPI app: `POST /arena/start`, `POST /arena/stop`, `POST /arena/tick`, `GET /arena/stream` (SSE).
+- Smoke-test via `curl` — start an arena, observe SSE, tick, stop.
+
+### Phase 7 — Frontend
+- Vite + vanilla TS, uPlot for charts.
+- Dark-default with light toggle.
+- 2×2 trader panels with value / chart / key facts / holdings heatmap / log trace.
+- SSE client for live logs; 1 Hz tick client for price/PnL refresh.
+- Drive a real arena from the UI end-to-end.
+
+### Phase 8 — Docker
+- Single `Dockerfile` at project root. Multi-stage: build the static frontend, install the uv-managed backend, serve frontend at `/` and backend routes from the same FastAPI app.
+- Run the full arena inside the container locally, verify parity with Phase 7.
+
+### Phase 9 — Scripts + polish
+- `scripts/start_mac.sh`, `scripts/stop_mac.sh`.
+- Final end-to-end test of a full 1-hour arena via the container.
+
+### Deferred (future phases)
+- Playwright MCP integration for web browsing.
+- fly.io deployment.
+- Past-games view in UI reading from the `games` history table.
+- Richer MCP sub-tool tracing in the trader log.
+
+## Open questions
+
+None currently — all prior questions resolved into the sections above. Add here as they arise.
