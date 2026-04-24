@@ -243,9 +243,17 @@ Each phase must validate before moving to the next — small, incremental steps.
 - `backend/test/test_arena_integration.py` — 90s real arena, 4 traders on `openai/gpt-oss-120b` via OpenRouter, live Massive prices, real MCPs. Opt-in via the `integration` pytest marker (`uv run pytest -m integration`) so the default suite stays fast.
 - Passed in 95s on the first run: 4 concurrent trader tasks, mid-arena tick snapshots, end-of-game liquidation to cash, exactly 1 row in `games` history, events from all 4 traders flowing through the arena queue (including `cycle_start`).
 
-### Phase 6 — API layer
-- FastAPI app: `POST /arena/start`, `POST /arena/stop`, `POST /arena/tick`, `GET /arena/stream` (SSE).
-- Smoke-test via `curl` — start an arena, observe SSE, tick, stop.
+### Phase 6 — API layer ✅ complete
+- `backend/api/app.py` — `create_app(holder=…)` factory exposing:
+  - `POST /arena/start` — returns started snapshot (409 if already running).
+  - `POST /arena/stop` — returns final snapshot (idempotent).
+  - `POST /arena/tick` — returns current snapshot (409 if not started).
+  - `GET /arena/stream` — SSE stream of `TraderEvent`s via `sse-starlette`.
+- `ArenaHolder` keeps the current Arena instance and swaps it at each start; accounts + prices are injected so tests can provide fakes.
+- `Arena` gained an **auto-end timer task**: on `start()` we spawn a task that sleeps for `duration_seconds` then calls `end()`. An `asyncio.Lock` plus cached `_final_snapshot` make manual `/arena/stop` and the auto-end safe under concurrent calls; the manual caller also cancels the timer.
+- `Accounts(db_path, check_same_thread=False)` — FastAPI's sync TestClient dispatches route handlers from a worker thread. We never write concurrently; safe.
+- `backend/test/test_api.py` — 8 tests via FastAPI's TestClient with the trader loop neutralized (no MCPs, no LLMs). Covers start/tick/stop shapes, 409 guards, idempotent stop, start-after-end (new game), SSE frame shape.
+- Uvicorn launch: `uv run uvicorn --factory backend.api.app:create_app`. `curl` smoke confirms `/arena/tick` and `/arena/stop` return 409 before start and `/docs` + `/openapi.json` are reachable.
 
 ### Phase 7 — Frontend
 - Vite + vanilla TS, uPlot for charts.

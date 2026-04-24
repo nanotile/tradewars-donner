@@ -89,6 +89,8 @@ class Arena:
     _tasks: list[asyncio.Task] = field(default_factory=list)
     _last_prices: dict[str, float] = field(default_factory=dict)
     _final_snapshot: ArenaSnapshot | None = None
+    _auto_end_task: asyncio.Task | None = None
+    _end_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     # ---- lifecycle ----
 
@@ -119,36 +121,52 @@ class Arena:
                 name=f"trader-{cfg.id}",
             ))
 
+        self._auto_end_task = asyncio.create_task(self._auto_end(), name="arena-auto-end")
+
+    async def _auto_end(self) -> None:
+        """Fires end() when the clock runs out. Idempotent with manual Stop."""
+        try:
+            await asyncio.sleep(self.config.duration_seconds)
+        except asyncio.CancelledError:
+            return
+        if self._ended_at is None:
+            await self.end()
+
     async def end(self) -> ArenaSnapshot:
         if self._started_at is None:
             raise RuntimeError("Arena not started")
-        if self._ended_at is not None:
-            assert self._final_snapshot is not None
-            return self._final_snapshot
+        async with self._end_lock:
+            if self._final_snapshot is not None:
+                return self._final_snapshot
 
-        self.stop_event.set()
+            # Cancel the auto-end timer if we're the manual caller.
+            current = asyncio.current_task()
+            if self._auto_end_task and self._auto_end_task is not current:
+                self._auto_end_task.cancel()
 
-        # Give in-flight cycles a chance to finish; cancel stragglers.
-        _done, pending = await asyncio.wait(
-            self._tasks, timeout=SHUTDOWN_TIMEOUT_SECONDS
-        )
-        for task in pending:
-            task.cancel()
-        for task in self._tasks:
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                logger.exception("trader task raised on shutdown")
+            self.stop_event.set()
 
-        await self._liquidate_all()
+            # Give in-flight cycles a chance to finish; cancel stragglers.
+            _done, pending = await asyncio.wait(
+                self._tasks, timeout=SHUTDOWN_TIMEOUT_SECONDS
+            )
+            for task in pending:
+                task.cancel()
+            for task in self._tasks:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    logger.exception("trader task raised on shutdown")
 
-        self._ended_at = _now()
-        snapshot = await self._snapshot(running=False)
-        self._record_game(snapshot)
-        self._final_snapshot = snapshot
-        return snapshot
+            await self._liquidate_all()
+
+            self._ended_at = _now()
+            snapshot = await self._snapshot(running=False)
+            self._record_game(snapshot)
+            self._final_snapshot = snapshot
+            return snapshot
 
     # ---- tick / snapshot ----
 

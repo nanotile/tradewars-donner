@@ -57,7 +57,10 @@ class Accounts:
 
     def __init__(self, db_path: str | Path = ":memory:"):
         self.db_path = str(db_path)
-        self.conn = sqlite3.connect(self.db_path)
+        # check_same_thread=False: FastAPI's async routes may be dispatched from
+        # a worker thread under TestClient; we never write concurrently, so this
+        # is safe.
+        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
         self.conn.commit()

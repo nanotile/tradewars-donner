@@ -151,6 +151,25 @@ async def test_tick_before_start_raises(mini_config, accounts):
         await arena.tick()
 
 
+async def test_auto_end_fires_when_duration_elapses(accounts, skip_memory_wipe):
+    """With a tiny duration, the arena should end itself without a manual call."""
+    config = ArenaConfig(
+        duration_seconds=0.2,
+        traders=[TraderConfig(
+            id="t0", display_name="T0",
+            provider="openai", model="gpt-5.4",
+            reasoning={"effort": "low"}, max_tokens=1000,
+        )],
+    )
+    arena = Arena(config=config, accounts=accounts, prices=FakePrices({}))
+    await arena.start()
+
+    await asyncio.sleep(0.5)  # give auto-end room to fire + shut down
+    assert arena._ended_at is not None
+    assert arena._final_snapshot is not None
+    assert len(accounts.list_games()) == 1
+
+
 async def test_liquidation_falls_back_to_last_tick_price_if_live_lookup_fails(
     mini_config, accounts, skip_memory_wipe,
 ):
