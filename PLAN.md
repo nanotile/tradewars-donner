@@ -162,7 +162,7 @@ Uses a small chart library (**uPlot**) rather than hand-rolled SVG — stays lig
 - Large portfolio-value display, green if P&L ≥ 0 else red.
 - Line chart of portfolio value over the hour, populating left-to-right. Downsample to keep point count bounded (~300 points over the hour, i.e. one point per ~12s averaged from 1 Hz ticks).
 - Key facts: cash, P&L.
-- Heatmap of current holdings — tile size = position value, color = per-position P&L.
+- Heatmap of current holdings — tile size = position value, color = per-position P&L. **On every tick, each ticker whose price changed flashes briefly bright green (up) or bright red (down), then decays back to its baseline color.** This gives the UI the "live trading floor" pulse.
 - Bounded log trace (e.g. last 100 entries) of tool calls and decisions, fed by SSE.
 
 **Tick loop:** UI sends `POST /arena/tick` every 1 second. Tick refreshes prices for all unique tickers across all 4 portfolios and returns the updated snapshot; UI appends to each chart and redraws.
@@ -193,19 +193,36 @@ Uses a small chart library (**uPlot**) rather than hand-rolled SVG — stays lig
 
 Each phase must validate before moving to the next — small, incremental steps.
 
-### Phase 1 — Preliminaries
-- Rewrite `backend/environment/accounts.py` from scratch (keyed by `trader_id`, supports buy/sell fractional, P&L, holdings, cash).
-- SQLite schema + migrations-lite (simple create-if-not-exists).
-- `games` history table.
-- Massive REST client for equity prices.
-- Unit tests for both. Run `uv run pytest` green before Phase 2.
+### Phase 1 — Preliminaries ✅ complete
+- `backend/environment/accounts.py` — SQLite-backed store with `accounts` / `holdings` / `trades` / `games` tables. Fractional shares, no shorting, blended avg cost on buys, per-trader isolation, `reset_working_state()` wipes traders but preserves games history.
+- `backend/environment/prices.py` — thin wrapper over the official `massive` Python client. Sync + async (`asyncio.to_thread`) variants. Pulls `MASSIVE_API_KEY` from `.env`.
+- `backend/test/test_accounts.py` (20 tests, in-memory SQLite).
+- `backend/test/test_prices.py` (6 tests against the live Massive API).
+- `pyproject.toml` pytest config (`asyncio_mode = "auto"`, testpaths).
+- `.gitignore` excludes `backend/environment/*.sqlite*` and `backend/environment/memory/`.
+- **26/26 tests green.** Confirmed live prices flowing from Massive.
 
-### Phase 2 — OpenAI Agents SDK prototyping
-- Single-trader standalone prototype (no arena, no UI) running one decision cycle.
-- Wire in the Massive MCP + Memory MCP via the SDK's async context manager.
-- **Confirm the agent can**: (a) get realtime prices, (b) get news, (c) get technical + fundamental data, (d) read/write memory.
-- **Nail down reasoning-effort passthrough for each of the 4 production models** — one at a time, verify via a debug print of the outbound request. This is the highest-risk unknown.
-- Confirm streaming events expose tool calls (for the future SSE log).
+### Phase 2 — OpenAI Agents SDK prototyping ✅ mostly complete
+- Single-trader standalone prototype at `backend/traders/prototype.py` — one decision cycle, both MCPs wired via `MCPServerStdio` async context.
+- **MCP stdio commands confirmed:**
+  - Massive: `mcp_massive` (installed via `uv tool install "mcp_massive @ git+https://github.com/massive-com/mcp_massive@v0.9.1"`). Env: `MASSIVE_API_KEY`. Three composable tools: `search_endpoints`, `call_api`, `query_data`.
+  - Memory: `npx -y @modelcontextprotocol/server-memory`. Env: `MEMORY_FILE_PATH` pointing to the per-trader JSONL file.
+  - `client_session_timeout_seconds=60` needed on first Massive start (it indexes the OpenAPI spec from llms-full.txt).
+- **All four agent capabilities exercised live:**
+  - (a) prices — AAPL snapshot via `call_api` + `query_data`
+  - (b) news — NVDA headlines via `/v2/reference/news`
+  - (c) technicals — 20-day SMA via `/v1/indicators/sma/{ticker}`
+  - (c) fundamentals — market cap via ticker overview + `stocks/financials/v1/ratios` is discoverable
+  - (d) memory — `create_entities` → `add_observations` → `read_graph` round-trip, and observations persist across cycles (the second run read back the first run's note).
+- **Streaming confirmed:** `Runner.run_streamed(...).stream_events()` surfaces `run_item_stream_event` with `tool_called`, `tool_output`, and `message_output_created` — sufficient for the future SSE trader log.
+- **`set_tracing_disabled(True)`** at prototype startup — we aren't using OpenAI's tracing backend, so suppress the noisy 401s.
+- **Reasoning-effort passthrough (via OpenRouter):** all 4 models routed through the same OpenAI-compatible client at `https://openrouter.ai/api/v1`. Config is uniform: `ModelSettings(extra_body={"reasoning": {"effort": "xhigh"}, "include_reasoning": True})`. OpenRouter maps `xhigh` to ~95% of `max_tokens` as reasoning budget; this is our "max reasoning per provider" setting.
+  - Claude Opus 4.7 (`anthropic/claude-opus-4-7`): ✅ extended thinking activated (455 reasoning tokens, answered the primality test correctly).
+  - GPT 5.4 (`openai/gpt-5.4`): ✅ 16,000 reasoning tokens — hit the `max_tokens=16000` ceiling.
+  - Kimi K2.6 (`moonshotai/kimi-k2.6`): ✅ 9,478 reasoning tokens — also hit the ceiling on completion.
+  - DeepSeek V4 Pro (`deepseek/deepseek-v4-pro`): ⚠️ reachable but upstream-rate-limited (429) — expected, released today. Monitor until providers come online; no code changes needed.
+- **`max_tokens` default:** `64_000` across all traders to avoid truncation at xhigh reasoning (xhigh reserves ~95% as thinking budget). Tunable per-trader in `config.json`.
+- **Note:** `thinking: {type: "enabled", ...}` (Anthropic's native field) does NOT pass through OpenRouter's OpenAI-compat layer. Use the unified `reasoning: {effort: ...}` form.
 
 ### Phase 3 — Game tools
 - `get_state(ctx)` and `trade(ctx, ticker, quantity)` as Agents SDK function tools.
@@ -242,6 +259,7 @@ Each phase must validate before moving to the next — small, incremental steps.
 ### Phase 9 — Scripts + polish
 - `scripts/start_mac.sh`, `scripts/stop_mac.sh`.
 - Final end-to-end test of a full 1-hour arena via the container.
+- **Delete throwaway probe scripts** from Phase 2: `backend/traders/prototype.py`, `backend/traders/reasoning_probe.py`, `backend/traders/native_probe.py`. Their lessons are already captured in CLAUDE.md and PLAN.md.
 
 ### Deferred (future phases)
 - Playwright MCP integration for web browsing.
