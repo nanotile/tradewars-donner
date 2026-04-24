@@ -1,0 +1,37 @@
+{
+  "duration_seconds": 3600,
+  "traders": [
+    {
+      "id": "claude",
+      "display_name": "Claude",
+      "provider": "anthropic",
+      "model": "anthropic/claude-opus-4-7",
+      "reasoning": {"effort": "max"},
+      "max_tokens": 64000
+    },
+    {
+      "id": "gpt",
+      "display_name": "GPT",
+      "provider": "openai",
+      "model": "gpt-5.4",
+      "reasoning": {"effort": "xhigh"},
+      "max_tokens": 64000
+    },
+    {
+      "id": "kimi",
+      "display_name": "Kimi",
+      "provider": "openrouter",
+      "model": "moonshotai/kimi-k2.6",
+      "reasoning": {"effort": "xhigh"},
+      "max_tokens": 64000
+    },
+    {
+      "id": "deepseek",
+      "display_name": "DeepSeek",
+      "provider": "openrouter",
+      "model": "deepseek/deepseek-v4-pro",
+      "reasoning": {"effort": "xhigh"},
+      "max_tokens": 64000
+    }
+  ]
+}
