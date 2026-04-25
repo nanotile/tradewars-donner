@@ -17,12 +17,20 @@ from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from backend.arena.arena import Arena, ArenaConfig, DEFAULT_CONFIG_PATH, reasoning_label
 from backend.environment.accounts import Accounts
 from backend.environment.prices import Prices
+
+# In production (Docker) the built frontend is copied alongside the backend.
+# In local dev the frontend lives at frontend/dist after `npm run build`.
+_FRONTEND_DIST_CANDIDATES = [
+    Path(__file__).resolve().parents[2] / "frontend_dist",
+    Path(__file__).resolve().parents[2] / "frontend" / "dist",
+]
 
 
 class StartRequest(BaseModel):
@@ -135,6 +143,13 @@ def create_app(holder: ArenaHolder | None = None) -> FastAPI:
                 }
 
         return EventSourceResponse(gen())
+
+    # Serve the built frontend at / when present. Mount LAST so all /arena/*
+    # routes above take precedence; html=True maps GET / → index.html.
+    for dist in _FRONTEND_DIST_CANDIDATES:
+        if dist.exists():
+            app.mount("/", StaticFiles(directory=str(dist), html=True), name="frontend")
+            break
 
     return app
 

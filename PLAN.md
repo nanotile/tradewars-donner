@@ -271,14 +271,18 @@ Each phase must validate before moving to the next — small, incremental steps.
 - Production build clean: `npm run build` → 62 KB JS / 6 KB CSS gzipped ~26 KB total, no TS errors, strict `tsc` passes.
 - Smoke test: backend on :8000 + vite on :5173 both came up, frontend HTML served, `POST /arena/tick` via Vite proxy returned the expected `409` from the backend. End-to-end interactive test in a browser is the user's to run (no browser from here).
 
-### Phase 8 — Docker
-- Single `Dockerfile` at project root. Multi-stage: build the static frontend, install the uv-managed backend, serve frontend at `/` and backend routes from the same FastAPI app.
-- Run the full arena inside the container locally, verify parity with Phase 7.
+### Phase 8 — Docker ✅ written, ⚠️ user-verify the build
+- `Dockerfile` (multi-stage): `node:22-alpine` builds the static frontend, `python:3.14-slim-trixie` runs the backend with `uv` + Node (for the Memory MCP via `npx`) + `mcp_massive` installed as a uv tool from git.
+- FastAPI now mounts the built `frontend_dist/` at `/` after all `/arena/*` routes register (mount order matters — API routes take precedence).
+- `.dockerignore` keeps `.env`, `node_modules`, `dist`, SQLite state, and any stale `.js` next to `.ts` out of the image.
+- Secrets passed via `--env-file .env` at run time, never baked in.
+- **Verification status:** Docker Hub was unreachable from this dev session (registry timeouts), so the live `docker build` and `docker run` smoke have not been completed here. Run `./scripts/start_mac.sh` locally to verify; the Dockerfile follows a standard multi-stage pattern and should build clean with normal network access.
 
-### Phase 9 — Scripts + polish
-- `scripts/start_mac.sh`, `scripts/stop_mac.sh`.
-- Final end-to-end test of a full 1-hour arena via the container.
-- **Delete throwaway probe scripts** from Phases 2–3: `backend/traders/prototype.py`, `backend/traders/reasoning_probe.py`, `backend/traders/native_probe.py`, `backend/traders/prototype_tools.py`. Their lessons are already captured in CLAUDE.md and PLAN.md.
+### Phase 9 — Scripts + polish ✅ complete
+- `scripts/start_mac.sh` — starts Docker Desktop if needed, builds the image, replaces any prior container, runs with `--env-file .env`. Final user-facing entry point: `./scripts/start_mac.sh` then open <http://localhost:8000>.
+- `scripts/stop_mac.sh` — `docker rm -f tradewars`, idempotent.
+- Throwaway probe scripts deleted: `backend/traders/{prototype,reasoning_probe,native_probe,prototype_tools}.py`. All their lessons are captured in CLAUDE.md.
+- Full unit-test suite green: **82 passing, 1 (integration) deselected by default**.
 
 ### Deferred (future phases)
 - Playwright MCP integration for web browsing.

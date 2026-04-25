@@ -1,0 +1,28 @@
+.git/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local secrets — must be passed via --env-file at run time, not baked in.
+.env
+
+# Frontend artefacts — the image rebuilds them inside the container.
+frontend/node_modules/
+frontend/dist/
+frontend/src/*.js
+frontend/src/*.js.map
+frontend/tsconfig.tsbuildinfo
+
+# Local SQLite / memory state — fresh state per container run.
+backend/environment/*.sqlite
+backend/environment/*.sqlite-journal
+backend/environment/memory/
+
+# Editor / OS junk.
+.DS_Store
+.idea/
+.vscode/

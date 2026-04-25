@@ -154,6 +154,17 @@ Gotchas:
 - `MAX_TURNS_PER_CYCLE = 200` on the Trader loop — reasoning models with heavy Massive MCP usage blow past 40 turns easily on exploratory cycles.
 - `INTER_CYCLE_SLEEP_SECONDS = 10.0` — the main cost throttle. After each `final_output` the trader loop sleeps 10 s before the next `Runner.run_streamed`. Caps cycles at ~6/minute/trader; without it a full game at max reasoning can rack up serious Anthropic/OpenAI spend surprisingly fast. Lower if you want more responsive trading, but watch the bill.
 
+### Container shape
+
+`Dockerfile` is multi-stage:
+1. `node:22-alpine` builds the static frontend (`npm run build` → `dist/`).
+2. `python:3.14-slim-trixie` is the runtime. It pulls `uv` from the official image, installs Node 22 (needed for `npx -y @modelcontextprotocol/server-memory`), `uv sync --frozen` for backend deps, and `uv tool install mcp_massive` from git. The built frontend is copied to `/app/frontend_dist`; FastAPI mounts that at `/` after the `/arena/*` routes register.
+3. Serves on `0.0.0.0:8000` via `uv run uvicorn --factory backend.api.app:create_app`.
+
+`scripts/start_mac.sh` and `scripts/stop_mac.sh` are macOS-friendly wrappers. The start script reads `.env` from the repo root and passes it to the container via `--env-file` — secrets are NEVER baked into the image (see `.dockerignore`).
+
+When testing/serving locally: build and run via `scripts/start_mac.sh`, then open <http://localhost:8000>. Vite dev mode (`npm run dev` + separate uvicorn) is still the fastest inner loop while iterating; the container is for distribution / fly.io deployment later.
+
 ### Frontend gotchas (uPlot + Vite)
 
 Three things bit us hard when wiring the chart panels:
