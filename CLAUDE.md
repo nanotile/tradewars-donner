@@ -1,17 +1,17 @@
 # Tradewars
 
-See this for the plan:
+A battle arena where 4 LLM agents day-trade live US equities for a fixed duration. Each trader starts with $1,000,000, sees realtime market data through the Massive (Polygon) MCP, can persist notes via a per-trader Memory MCP, and competes against three rivals running different frontier models. The clock auto-liquidates everyone at the end and the highest portfolio value wins.
 
-@PLAN.md
+Built with the OpenAI Agents SDK (Python, async), FastAPI + SSE, a Vite + vanilla-TS frontend with uPlot charts, and packaged as a single multi-stage Docker image.
 
 ## Running locally
 
 **Dev (fast inner loop):**
 ```bash
-# terminal 1 — backend with auto-reload via uvicorn
+# terminal 1 — backend
 uv run uvicorn --factory backend.api.app:create_app --port 8000
 
-# terminal 2 — frontend with HMR; vite proxies /arena/* to :8000
+# terminal 2 — frontend (vite proxies /arena/* to :8000)
 cd frontend && npm run dev
 # → http://localhost:5173
 ```
@@ -29,7 +29,9 @@ uv run pytest                 # 82 unit tests (~4 s)
 uv run pytest -m integration  # opt-in 90 s real arena via gpt-oss-120b
 ```
 
-The integration test is gated behind the `integration` marker (see `pyproject.toml`'s `addopts`) so it doesn't fire on every `pytest` run — it spawns real MCP subprocesses and hits OpenRouter + Massive.
+The integration test is gated behind the `integration` marker so it doesn't fire on every `pytest` run — it spawns real MCP subprocesses and hits OpenRouter + Massive.
+
+**Required env vars** (in `.env` at repo root): `MASSIVE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`.
 
 ## Repo layout
 
@@ -39,202 +41,161 @@ backend/
   traders/       templates.py (system prompt), models.py (provider factory),
                  mcp_servers.py (MCP factories), tools.py (get_state/trade),
                  trader.py (decision-cycle loop)
-  arena/         arena.py (lifecycle), config.json (max+eco variants)
+  arena/         arena.py (lifecycle), config.json (model catalog + presets)
   api/           app.py (FastAPI: /arena/start|stop|tick|stream|config)
-  test/          pytest suite + integration test
+  test/          pytest suite + opt-in integration test
 frontend/
   src/           api.ts, state.ts, theme.ts, topbar.ts, chart.ts (uPlot),
                  heatmap.ts, log.ts, panel.ts, main.ts, styles.css
-  index.html     sidebar (clock/duration/max-mode/roster/buttons) + 2×2 panels
+  index.html     sidebar (clock + duration + slot pickers + presets +
+                 start/stop) + 2×2 panels grid
   vite.config.ts dev proxy to :8000
 scripts/         start_mac.sh, stop_mac.sh
-Dockerfile       multi-stage (node frontend build → python+uv runtime)
+Dockerfile       multi-stage (node frontend → python+uv runtime)
 ```
 
-## Working code strategies
+## Core architecture
 
-### MCP stdio servers (via OpenAI Agents SDK)
+### Decision-cycle loop (per trader)
 
-- Use `agents.mcp.MCPServerStdio` as an async context manager.
-- Pass `client_session_timeout_seconds=60` — Massive needs >5s on first start (indexes OpenAPI spec).
-- Always pass `cache_tools_list=True` so we don't re-list tools each decision cycle.
-- Pass env via `params={"env": {**os.environ, ...}}` — child process does not inherit automatically.
+Every trader runs a **continuous async loop of independent decision cycles**. One cycle = one `Runner.run_streamed(...)` until the model emits `final_output`. After each cycle, sleep `INTER_CYCLE_SLEEP_SECONDS` (10 s — the main cost throttle), then start a fresh `Runner.run_streamed`. **No conversation history accumulates across cycles** — each cycle is bounded to one run's worth of tokens. Per-cycle context is just the static system prompt + a one-line user message ("decision cycle N. Previous rationale: …. Take your next action."). Solves both context bloat over a long game and the SDK's "final_output ends the run" boundary in one pattern.
 
-**Massive MCP:** install once with `uv tool install "mcp_massive @ git+https://github.com/massive-com/mcp_massive@v0.9.1"`. Invoke as `mcp_massive` with `MASSIVE_API_KEY` in env. Three composable tools (`search_endpoints`, `call_api`, `query_data`) — not one tool per endpoint.
+All 4 traders run concurrently via `asyncio.gather` with a shared `stop_event`. Mid-cycle exceptions log + emit an `error` event + back off 2 s + continue (DeepSeek 429s and similar transient failures don't kill the trader).
 
-**Memory MCP (Anthropic reference):** `npx -y @modelcontextprotocol/server-memory` with `MEMORY_FILE_PATH` env var pointing to a per-trader JSONL file. Nine tools: `create_entities`, `create_relations`, `add_observations`, `delete_entities`, `delete_observations`, `delete_relations`, `read_graph`, `search_nodes`, `open_nodes`. Note: `add_observations` fails silently if the entity doesn't exist — prompt traders to `create_entities` first.
+### Tools per trader
 
-### Streaming events
+Two function tools (carried via `RunContextWrapper.context`):
+- `get_state()` — own cash + holdings (with per-position avg cost, current price, market value, unrealized P&L) + total portfolio value + total P&L + time remaining + each rival's total portfolio value (only the total — no rival holdings leaked).
+- `trade(ticker, quantity)` — fills synchronously at the live Massive quote. Fractional, no shorting.
 
-`Runner.run_streamed(agent, input, max_turns=N).stream_events()` yields three useful event types:
-- `run_item_stream_event` with `name == "tool_called"` → `event.item.raw_item.name` is the tool name
-- `run_item_stream_event` with `name == "tool_output"` → `event.item.raw_item["output"]` or `.output`
-- `run_item_stream_event` with `name == "message_output_created"` → final assistant message; text is in `event.item.raw_item.content[i].text`
+Plus two MCP servers, **per trader** (isolated subprocesses + storage):
+- **Massive MCP** — `mcp_massive` binary, three composable tools (`search_endpoints`, `call_api`, `query_data`) covering prices, news, technicals, fundamentals.
+- **Memory MCP** — `npx -y @modelcontextprotocol/server-memory`, knowledge graph (entities/relations/observations), per-trader JSONL file wiped on every Start.
 
-Default `max_turns=10` is too low once MCP servers are wired — bump to 30+.
+### Slot configuration & model catalog
 
-### Tracing
+The sidebar lets the user pick a model + reasoning effort per slot. Behaviour:
 
-`set_tracing_disabled(True)` at startup when we're not using OpenAI's tracing backend — suppresses noisy 401s if `OPENAI_API_KEY` is unset or invalid.
+- **No slot label** — the dropdown showing the picked model IS the slot's identity.
+- **Per-model reasoning options** — every model declares 1 or 2 reasoning options. Models with two show two buttons; models with one show that single button **disabled** (info, not interactive).
+- **Reasoning labels stay technical** (`xhigh`, `max`, `low`, `none`, `off`, `32k`) — not normalised to "high/low" so users see exactly which knob is firing.
+- **Duplicate models allowed.** When two slots resolve to the same `<display_name> (<reasoning_label>)`, the second gets ` #2`, third `#3`, etc.
+- **Trader id (DB key, memory file, game history) = `<display_name> (<reasoning_label>)`** with that disambiguator, e.g. `Claude Opus 4.7 (max)` → memory file `trader_Claude_Opus_4.7_max.jsonl`.
+- **Presets** — Eco / Max buttons fully **overwrite** all four slot selections. Eco is the UI default on first load.
 
-### Reasoning-effort passthrough: two working paths
-
-**Path A — OpenRouter (unified, simplest):**
-```python
-from openai import AsyncOpenAI
-from agents import OpenAIChatCompletionsModel, ModelSettings
-
-client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=OPENROUTER_API_KEY)
-model = OpenAIChatCompletionsModel(model="anthropic/claude-opus-4-7", openai_client=client)
-
-settings = ModelSettings(
-    max_tokens=64_000,
-    extra_body={"reasoning": {"effort": "xhigh"}, "include_reasoning": True},
-)
-```
-OpenRouter's `reasoning.effort` accepts `minimal | low | medium | high | xhigh`. `xhigh` ≈ 95% of `max_tokens` as the thinking budget. Works uniformly for most frontier models (we use it for Kimi K2.6). **Do NOT pass Anthropic's native `thinking: {type: "enabled", ...}` field via OpenRouter — it's silently dropped.**
-
-**Path B — native SDKs:**
-
-GPT-5.5 native (uses OpenAI `reasoning.effort`):
-```python
-from openai.types.shared import Reasoning
-settings = ModelSettings(
-    reasoning=Reasoning(effort="xhigh"),
-    max_tokens=64_000,
-)
-agent = Agent(..., model="gpt-5.5", model_settings=settings)
-```
-Gotcha: `effort="none"` (used for gpt-5.4-mini and smaller models) is a valid API value but is NOT in the SDK's `Reasoning.effort` Literal on openai-python ≤ 2.x. When we see `"none"` in our config we omit the `reasoning` field entirely — OpenAI's own default (no reasoning) applies.
-
-Claude Opus 4.7 native (via `LitellmModel` extension, using Anthropic's **new** adaptive thinking API):
-```python
-from agents.extensions.models.litellm_model import LitellmModel
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-
-# Monkey-patch: widen LiteLLM 1.83's Opus-4.6-only `effort="max"` gate to
-# include Opus 4.7 too. The check is `_is_opus_4_6_model` (a @staticmethod)
-# inside `AnthropicConfig.transform_request`. Let Anthropic be the truth.
-def _is_opus_4_6_or_4_7(model: str) -> bool:
-    m = model.lower()
-    return any(v in m for v in (
-        "opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6",
-        "opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7",
-    ))
-AnthropicConfig._is_opus_4_6_model = staticmethod(_is_opus_4_6_or_4_7)
-
-model = LitellmModel(model="anthropic/claude-opus-4-7", api_key=ANTHROPIC_API_KEY)
-settings = ModelSettings(
-    max_tokens=64_000,
-    extra_args={
-        "thinking": {"type": "adaptive"},        # NOT the old "enabled" form
-        "output_config": {"effort": "max"},      # requires the monkey-patch above
-    },
-)
-```
-Critical gotchas:
-- **Opus 4.7 and Haiku 4.5 use DIFFERENT thinking interfaces.** Only Opus 4.7 accepts the new `thinking:{type:"adaptive"}` form; Haiku 4.5 (and Sonnet 4.x) still use the legacy `thinking:{type:"enabled", budget_tokens:N}` form. Cross-sending either shape to the wrong model produces:
-  - Haiku receives adaptive → *"adaptive thinking is not supported on this model"*
-  - Opus 4.7 receives enabled → *"thinking.type.enabled is not supported for this model. Use thinking.type.adaptive and output_config.effort to control thinking behavior."*
-  We branch on config shape: `{"budget_tokens": N}` → enabled form; `{"effort": "max"|...}` → adaptive form. Our Haiku eco config includes both (`{"effort": "low", "budget_tokens": 1024}`) — `effort` is kept purely for the UI label, `budget_tokens` drives the API call.
-- **LiteLLM 1.83 blocks `effort="max"` for Opus 4.7 via a stale validator.** We ship the one-line monkey-patch above to bypass it; drop the patch once LiteLLM 1.84+ is on PyPI.
-- Use `extra_args` (top-level kwargs to `litellm.acompletion`) not `extra_body` (goes inside request body, Anthropic rejects as "Extra inputs are not permitted").
-- Omit `temperature` entirely when thinking is enabled — Anthropic requires the default. Setting it explicitly to anything other than 1.0 errors out.
-
-Gemini native (via `LitellmModel` with the `gemini/` prefix). Two channels for thinking, preferring the explicit one for brand-new models where LiteLLM's unified mapping may be conservative:
-```python
-model = LitellmModel(
-    model="gemini/gemini-3.1-pro-preview",
-    api_key=os.environ["GOOGLE_API_KEY"],
-)
-# Preferred: explicit thinking budget — LiteLLM forwards to Google's `thinkingConfig`.
-settings = ModelSettings(
-    max_tokens=64_000,
-    extra_args={"thinking": {"type": "enabled", "budget_tokens": 32_000}},
-)
-# Alternative: LiteLLM's unified reasoning_effort knob (low/medium/high).
-# May map conservatively for very new model ids that LiteLLM doesn't know yet.
-settings = ModelSettings(
-    max_tokens=64_000,
-    extra_args={"reasoning_effort": "high"},
-)
-```
-Gotchas:
-- The `gemini/` prefix routes through Google AI Studio; `vertex_ai/` would route through Vertex (not what we want — we have `GOOGLE_API_KEY`, not service-account creds).
-- Pass Gemini knobs through `extra_args` (same channel as Anthropic). It is NOT the same as OpenAI's structured `Reasoning(effort=...)` object.
-- Our config supports both shapes: `{"budget_tokens": N}` uses the explicit `thinking` form; `{"effort": "..."}` falls back to `reasoning_effort`.
-
-### Provider routing cheat sheet
-
-| Provider | `build_model` returns | Reasoning knob channel | Config shape it reads |
-|---|---|---|---|
-| `openai`     | plain model-id string        | `ModelSettings.reasoning=Reasoning(effort=...)`, or omitted entirely when `effort="none"` | `{"effort": "xhigh"\|"high"\|...\|"none"}` |
-| `anthropic`  | `LitellmModel`               | `extra_args={"thinking":{"type":"adaptive"},"output_config":{"effort":...},"cache_control":{"type":"ephemeral"}}` | `{"effort": "max"\|"high"\|"low"\|...}` |
-| `google`     | `LitellmModel`               | Prefers `extra_args={"thinking":{"type":"enabled","budget_tokens":N}}` if `budget_tokens` is in config; else `extra_args={"reasoning_effort":...}` | `{"budget_tokens": N}` **or** `{"effort": "high"\|...}` |
-| `deepseek`   | `OpenAIChatCompletionsModel` pointed at `https://api.deepseek.com` | `extra_body={"reasoning_effort":...,"thinking":{"type":"enabled"\|"disabled"}}` (either or both, whichever the config carries) | `{"effort": "max", "thinking": {"type":"enabled"}}` for max; `{"thinking": {"type":"disabled"}}` for eco |
-| `openrouter` | `OpenAIChatCompletionsModel` | `extra_body={"reasoning":{"effort":...}}` | `{"effort": "xhigh"\|"high"\|...}` |
-
-### Config file shape: max vs eco variants
-
-`backend/arena/config.json` stores TWO variants per trader so we can flip between a full max-reasoning line-up and a cheap eco line-up from the UI without editing config. Top-level key per trader:
+`backend/arena/config.json` is a **catalog** of every model the UI can offer plus named **presets**:
 
 ```json
 {
-  "id": "claude",
+  "duration_seconds": 720,
   "max_tokens": 64000,
-  "max": { "display_name": "Claude Opus 4.7",  "provider": "anthropic", "model": "anthropic/claude-opus-4-7",  "reasoning": {"effort": "max"} },
-  "eco": { "display_name": "Claude Haiku 4.5", "provider": "anthropic", "model": "anthropic/claude-haiku-4-5", "reasoning": {"effort": "low"} }
+  "models": {
+    "claude-opus-4-7": {
+      "display_name": "Claude Opus 4.7",
+      "provider": "anthropic",
+      "model": "anthropic/claude-opus-4-7",
+      "reasoning_options": [
+        {"label": "max", "reasoning": {"effort": "max"}}
+      ]
+    },
+    "gpt-5-5": {
+      "display_name": "GPT 5.5",
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "reasoning_options": [
+        {"label": "xhigh", "reasoning": {"effort": "xhigh"}},
+        {"label": "low",   "reasoning": {"effort": "low"}}
+      ]
+    }
+  },
+  "presets": {
+    "max": [{"model_id": "claude-opus-4-7", "reasoning_label": "max"}, ...],
+    "eco": [...]
+  }
 }
 ```
 
-`max_tokens` is shared across variants (per-trader). `display_name`, `provider`, `model`, and `reasoning` are per-variant.
+`ArenaConfig.from_selections([{model_id, reasoning_label}, ...])` resolves selections to `TraderConfig`s with the disambiguated id. `GET /arena/config` returns the full catalog so the sidebar can populate dropdowns. `POST /arena/start` accepts `selections` (4 in slot order) or falls back to the `max` preset.
 
-- `ArenaConfig.load(path, max_mode=True|False)` flattens the selected variant into a `TraderConfig`.
-- `/arena/start` accepts `max_mode: bool` (default `False` — eco mode; the UI sidebar's "Max mode" toggle drives this).
-- `/arena/config` (GET) returns both variants' display_name + reasoning_label so the sidebar roster can preview the line-up before Start.
-- `arena.reasoning_label(reasoning)` turns a reasoning dict into a short UI label: `{"effort": "max"}` → `"max"`, `{"budget_tokens": 32000}` → `"32k"`, `{"thinking": {"type": "disabled"}}` → `"off"`, `{"thinking": {"type": "enabled"}}` → `"on"`. When both `effort` and `thinking` are set (DeepSeek max), effort wins. Emitted on every `TraderSnapshot` so panel headers render `"Claude Opus 4.7 (max)"`.
+## Provider routing
 
-### Model defaults
+| Provider | `build_model` returns | Reasoning knob channel | Config shape |
+|---|---|---|---|
+| `openai`     | plain model-id string        | `ModelSettings.reasoning=Reasoning(effort=...)`, omitted entirely when `effort="none"` | `{"effort": "xhigh"\|"high"\|...\|"none"}` |
+| `anthropic`  | `LitellmModel`               | `extra_args={"thinking":{"type":"adaptive"},"output_config":{"effort":...},"cache_control":{"type":"ephemeral"}}` for Opus 4.7; `{"thinking":{"type":"enabled","budget_tokens":N}, "cache_control":...}` for Haiku/Sonnet | `{"effort": "..."}` (Opus, adaptive form) **or** `{"effort": "...", "budget_tokens": N}` (Haiku — `effort` is for the UI label, `budget_tokens` drives the API) |
+| `google`     | `LitellmModel` (`gemini/` prefix) | `extra_args={"thinking":{"type":"enabled","budget_tokens":N}}` if `budget_tokens` is set, else `extra_args={"reasoning_effort":...}` | `{"budget_tokens": N}` **or** `{"effort": "..."}` |
+| `deepseek`   | `OpenAIChatCompletionsModel` at `https://api.deepseek.com` | `extra_body={"reasoning_effort":...,"thinking":{"type":"enabled"\|"disabled"}}` (either or both) | `{"effort": "max", "thinking": {"type":"enabled"}}` for Pro, `{"thinking": {"type":"disabled"}}` for Flash |
+| `openrouter` | `OpenAIChatCompletionsModel` at `https://openrouter.ai/api/v1` | `extra_body={"reasoning":{"effort":...}}` | `{"effort": "xhigh"\|"high"\|...}` |
 
-- `max_tokens=64_000` to avoid truncation at xhigh reasoning (xhigh reserves ~95% as thinking budget).
-- Anthropic `budget_tokens` ≤ `max_tokens` (strictly less if you want any output tokens).
-- `MAX_TURNS_PER_CYCLE = 200` on the Trader loop — reasoning models with heavy Massive MCP usage blow past 40 turns easily on exploratory cycles.
-- `INTER_CYCLE_SLEEP_SECONDS = 10.0` — the main cost throttle. After each `final_output` the trader loop sleeps 10 s before the next `Runner.run_streamed`. Caps cycles at ~6/minute/trader; without it a full game at max reasoning can rack up serious Anthropic/OpenAI spend surprisingly fast. Lower if you want more responsive trading, but watch the bill.
+### Critical reasoning-passthrough gotchas
 
-### Container shape
+- **Opus 4.7 and Haiku 4.5 use DIFFERENT thinking interfaces.** Opus 4.7 only accepts the new `thinking:{type:"adaptive"}` + `output_config.effort`. Haiku 4.5 (and Sonnet 4.x) still use the legacy `thinking:{type:"enabled", budget_tokens:N}`. Cross-sending either shape to the wrong model produces a clear API error. We branch on config shape: `{budget_tokens}` → enabled form; `{effort}` → adaptive form.
+- **LiteLLM 1.83 blocks `effort="max"` for Opus 4.7** via a stale "4.6-only" validator. We monkey-patch `AnthropicConfig._is_opus_4_6_model` to accept 4.7 too. Drop the patch when LiteLLM 1.84+ ships.
+- **`extra_args` vs `extra_body`** for LiteLLM-routed providers (Anthropic, Google): use `extra_args` (top-level kwargs to `litellm.acompletion`). `extra_body` would wrap them inside the request body and Anthropic rejects it.
+- **Omit `temperature` entirely when Anthropic thinking is enabled** — anything other than the default (1.0) errors out.
+- **OpenAI `effort="none"`** is a valid API value but isn't in the SDK's `Reasoning.effort` Literal on openai-python ≤ 2.x. We omit the `reasoning` field entirely in that case (the model's own default applies).
 
-`Dockerfile` is multi-stage:
-1. `node:22-alpine` builds the static frontend (`npm run build` → `dist/`).
-2. `python:3.14-slim-trixie` is the runtime. It pulls `uv` from the official image, installs Node 22 (needed for `npx -y @modelcontextprotocol/server-memory`), `uv sync --frozen` for backend deps, and `uv tool install mcp_massive` from git. The built frontend is copied to `/app/frontend_dist`; FastAPI mounts that at `/` after the `/arena/*` routes register.
-3. Serves on `0.0.0.0:8000` via `uv run uvicorn --factory backend.api.app:create_app`.
+## Cost controls
 
-`scripts/start_mac.sh` and `scripts/stop_mac.sh` are macOS-friendly wrappers. The start script reads `.env` from the repo root and passes it to the container via `--env-file` — secrets are NEVER baked into the image (see `.dockerignore`).
+- `max_tokens = 64_000` per trader so xhigh/max thinking has room without truncating.
+- `MAX_TURNS_PER_CYCLE = 200` — reasoning models on a Massive deep-dive can hit 40+ turns.
+- `INTER_CYCLE_SLEEP_SECONDS = 10.0` — caps cycles to ~6/min/trader. Without this an Opus-max game racks up serious spend in minutes.
+- **Anthropic prompt caching** enabled via the top-level `cache_control: {type: "ephemeral"}` field (Anthropic's 2026 automatic caching mode). LiteLLM forwards it through. Confirm cache is firing by inspecting `result.usage.cache_creation_input_tokens` / `cache_read_input_tokens`.
+- **OpenAI prompt caching** is automatic for prompts ≥1024 tokens — already firing for GPT.
+- **Gemini** caching uses Google's separate CachedContent API; not wired up. Skip for now — Gemini's per-token cost is low and Anthropic was the bigger lever.
+- The system prompt is **byte-identical across all cycles within a game** (computed once at Agent construction in `Trader.run_until_stopped`) — maximum cache hit rate.
 
-When testing/serving locally: build and run via `scripts/start_mac.sh`, then open <http://localhost:8000>. Vite dev mode (`npm run dev` + separate uvicorn) is still the fastest inner loop while iterating; the container is for distribution / fly.io deployment later.
+## OpenAI Agents SDK patterns
 
-### Frontend gotchas (uPlot + Vite)
+### MCP stdio servers
 
-Three things bit us hard when wiring the chart panels:
+- Use `agents.mcp.MCPServerStdio` as an async context manager.
+- `client_session_timeout_seconds=60` — Massive needs >5 s on first start (it indexes the OpenAPI spec).
+- `cache_tools_list=True` — don't re-list tools each decision cycle (also keeps tool descriptions stable for prompt caching).
+- Pass env via `params={"env": {**os.environ, ...}}` — the child process doesn't inherit automatically.
 
-1. **`tsc -b` was emitting `.js` next to `.ts` in `src/`.** Vite's dev server serves whichever file matches the import URL (`/src/panel.js`); when stale `.js` exist, Vite serves THEM instead of compiling the live `.ts`. Symptoms: code changes visibly do nothing in the browser even after restarts. Fix: `noEmit: true` in `frontend/tsconfig.json` and `.gitignore` for `frontend/src/*.js`. Don't ever check those in.
+### Streaming events
 
-2. **uPlot misbehaves if its host is not in the DOM at `new uPlot(...)` time** — internal initial-draw goes down a code path that subsequently throws `s.stroke is not a function` on every redraw, the canvas stays at its initial size, and you get a panel with axes but no line. `TraderPanel` defers chart creation to a `mount()` method that `main.ts` calls AFTER `panelHost.append(panel.root)`.
+`Runner.run_streamed(agent, input, max_turns=N).stream_events()` yields `run_item_stream_event`s with three useful names:
+- `tool_called` → `event.item.raw_item.name` is the tool name; `.arguments` is the JSON.
+- `tool_output` → `event.item.raw_item["output"]` (or `.output`) is what to render.
+- `message_output_created` → final assistant message; text is in `event.item.raw_item.content[i].text`.
 
-3. **Don't mutate `series.stroke` to a string after init** to flip the line color (e.g. green/red on P&L sign). uPlot caches the value in a way that breaks subsequent renders. Use a stroke callback instead: `stroke: (u) => u.data[1].at(-1) >= initial ? "#3fbf7f" : "#e05560"`. Same `s.stroke is not a function` symptom.
+Default `max_turns=10` is too low once MCP servers are wired — bump to 30+ (we use 200).
 
-### Prompt caching (per provider)
+### Tracing
 
-- **OpenAI Responses API**: automatic for prompts ≥1024 tokens. No opt-in needed. Already firing for GPT.
-- **Anthropic**: NOT implicit by default. Anthropic's 2026 "automatic caching" mode is a single top-level `cache_control={"type":"ephemeral"}` field on `/v1/messages` — without it nothing caches. We add it via `extra_args` in `build_model_settings` for the `anthropic` provider. LiteLLM 1.83 officially documents only the older per-message cache_control markers, but the top-level field is passed through unchanged to Anthropic. Confirm it's firing by checking `result.usage.cache_creation_input_tokens` / `cache_read_input_tokens`.
-- **Gemini**: Google has a separate CachedContent API; not automatic, and LiteLLM doesn't expose a unified knob. Skipped for now — Gemini's per-token cost is lower and this plays second-fiddle to the Anthropic fix.
-- **System prompt stability**: `render_system_prompt(duration_seconds)` is computed once at Agent construction in `Trader.run_until_stopped`. All cycles within a game reuse the same `Agent` with the same `instructions` string, so the system prompt is byte-identical across cycles. Tool descriptions are cached too (`cache_tools_list=True` on both MCPs). Prefix is cache-friendly; the varying suffix is just the per-cycle user message.
+`set_tracing_disabled(True)` at startup when not using OpenAI's tracing backend — suppresses noisy 401s if `OPENAI_API_KEY` is unset or invalid.
 
 ## Tool output formatting
 
-SDK-level `event.item.raw_item` for `tool_output` events arrives in two shapes that must be normalised before display:
+SDK-level `event.item.raw_item` for `tool_output` events arrives in two shapes:
 - **MCP tools**: `[{"type": "input_text", "text": "..."}]` — a list of content parts.
 - **Function tools** (`get_state`, `trade`): a plain dict.
 
 `backend/traders/trader.py::_format_output` flattens both: strips MCP wrappers to the inner text, JSON-serialises dicts. Doing `str(raw_out)` would emit Python repr noise (`[{'type': 'input_text', 'text': '...'}]`) which is unreadable in the UI.
 
-The frontend `log.ts` further humanises tool *calls* (e.g. `trade({"ticker":"INTC","quantity":-100})` → `sell 100 INTC`; `call_api({path, params, store_as})` → `path · k=v k=v`; memory ops `create_entities`/`add_observations`/`read_graph` → `remember X` / `note on X` / `read memory`) and compacts tool *outputs* ("Stored N rows in X" → `stored N rows → X`; endpoint listings → `N endpoints found`; empty responses → `no data`).
+`frontend/src/log.ts` further humanises tool *calls* (e.g. `trade({"ticker":"INTC","quantity":-100})` → `sell 100 INTC`; `call_api({path, params, store_as})` → `path · k=v k=v`; memory ops `create_entities`/`add_observations`/`read_graph` → `remember X` / `note on X` / `read memory`) and compacts tool *outputs* ("Stored N rows in X" → `stored N rows → X`; endpoint listings → `N endpoints found`; empty responses → `no data`).
+
+## Container shape
+
+`Dockerfile` is multi-stage:
+1. `node:22-alpine` builds the static frontend (`npm run build` → `dist/`).
+2. `python:3.14-slim-trixie` is the runtime. It pulls `uv` from the official image, installs Node 22 (for `npx -y @modelcontextprotocol/server-memory`), `uv sync --frozen` for backend deps, and `uv tool install mcp_massive` from git. The built frontend is copied to `/app/frontend_dist`; FastAPI mounts that at `/` after the `/arena/*` routes register (mount order matters — API routes take precedence).
+3. Serves on `0.0.0.0:8000` via `uv run uvicorn --factory backend.api.app:create_app`.
+
+`scripts/start_mac.sh` and `stop_mac.sh` are the wrappers. The start script reads `.env` and passes it to the container via `--env-file` — secrets are NEVER baked in (see `.dockerignore`).
+
+## Frontend gotchas (uPlot + Vite)
+
+Three things bit us hard when wiring the chart panels:
+
+1. **`tsc -b` was emitting `.js` next to `.ts` in `src/`.** Vite's dev server serves whichever file matches the import URL (`/src/panel.js`); when stale `.js` exist, Vite serves THEM instead of compiling the live `.ts`. Symptom: code changes visibly do nothing in the browser even after restarts. Fix: `noEmit: true` in `frontend/tsconfig.json` and `.gitignore` for `frontend/src/*.js`. **Never check those in.**
+
+2. **uPlot misbehaves if its host is not in the DOM at `new uPlot(...)` time.** Internal initial-draw goes down a code path that subsequently throws `s.stroke is not a function` on every redraw, the canvas stays at its initial size, and you get a panel with axes but no line. `TraderPanel` defers chart creation to a `mount()` method that `main.ts` calls AFTER `panelHost.append(panel.root)`.
+
+3. **Don't mutate `series.stroke` to a string after init** to flip the line color (e.g. green/red on P&L sign). uPlot caches the value in a way that breaks subsequent renders. Use a stroke callback instead: `stroke: (u) => u.data[1].at(-1) >= initial ? "#3fbf7f" : "#e05560"`. Same `s.stroke is not a function` symptom.
+
+## Plan & decisions
+
+@PLAN.md

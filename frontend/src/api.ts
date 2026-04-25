@@ -18,28 +18,36 @@ export interface TraderSnapshot {
   total_pnl: number;
 }
 
-export interface TraderVariant {
-  display_name: string;
-  reasoning_label: string;
-}
-
-export interface TraderConfigSummary {
-  id: string;
-  max: TraderVariant;
-  eco: TraderVariant;
-}
-
-export interface ArenaConfigSummary {
-  duration_seconds: number;
-  traders: TraderConfigSummary[];
-}
-
 export interface ArenaSnapshot {
   started_at: string;
   time_elapsed_seconds: number;
   time_remaining_seconds: number;
   running: boolean;
   traders: TraderSnapshot[];
+}
+
+export interface ReasoningOption {
+  label: string;
+  reasoning: Record<string, unknown>;
+}
+
+export interface ModelSpec {
+  display_name: string;
+  provider: string;
+  model: string;
+  reasoning_options: ReasoningOption[];
+}
+
+export interface PresetSelection {
+  model_id: string;
+  reasoning_label: string;
+}
+
+export interface ArenaConfigCatalog {
+  duration_seconds: number;
+  max_tokens: number;
+  models: Record<string, ModelSpec>;
+  presets: Record<string, PresetSelection[]>;
 }
 
 export interface TraderEvent {
@@ -66,22 +74,15 @@ async function post(path: string, body?: unknown): Promise<Response> {
 
 export interface StartOptions {
   durationSeconds?: number;
-  maxMode?: boolean;
+  selections?: PresetSelection[];
 }
 
 export async function startArena(opts: StartOptions = {}): Promise<ArenaSnapshot> {
-  const body = {
-    duration_seconds: opts.durationSeconds,
-    max_mode: opts.maxMode ?? false,
-  };
+  const body: Record<string, unknown> = {};
+  if (opts.durationSeconds) body.duration_seconds = opts.durationSeconds;
+  if (opts.selections) body.selections = opts.selections;
   const r = await post("/arena/start", body);
-  if (!r.ok) throw new Error(`start failed: ${r.status}`);
-  return r.json();
-}
-
-export async function fetchArenaConfig(): Promise<ArenaConfigSummary> {
-  const r = await fetch("/arena/config");
-  if (!r.ok) throw new Error(`config failed: ${r.status}`);
+  if (!r.ok) throw new Error(`start failed: ${r.status} — ${await r.text()}`);
   return r.json();
 }
 
@@ -97,6 +98,12 @@ export async function tickArena(): Promise<ArenaSnapshot> {
   return r.json();
 }
 
+export async function fetchArenaConfig(): Promise<ArenaConfigCatalog> {
+  const r = await fetch("/arena/config");
+  if (!r.ok) throw new Error(`config failed: ${r.status}`);
+  return r.json();
+}
+
 export function openStream(
   onEvent: (event: TraderEvent) => void,
   onError?: (err: Event) => void,
@@ -109,7 +116,6 @@ export function openStream(
       /* ignore malformed frames */
     }
   };
-  // sse-starlette emits named events; listen to each type we care about.
   const types: TraderEvent["type"][] = [
     "cycle_start",
     "cycle_end",

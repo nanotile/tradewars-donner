@@ -23,8 +23,15 @@ MEMORY_DIR = REPO_ROOT / "backend" / "environment" / "memory"
 _MCP_INIT_TIMEOUT = 60
 
 
+def _safe_id_for_filename(trader_id: str) -> str:
+    """Trader ids can contain spaces, parens, '#' — keep alnum/dot/dash/underscore
+    and substitute everything else with '_'. Stable so the same trader_id always
+    maps to the same file."""
+    return "".join(c if c.isalnum() or c in "._-" else "_" for c in trader_id).strip("_") or "trader"
+
+
 def memory_file_path(trader_id: str) -> Path:
-    return MEMORY_DIR / f"trader_{trader_id}.jsonl"
+    return MEMORY_DIR / f"trader_{_safe_id_for_filename(trader_id)}.jsonl"
 
 
 def wipe_memory_files(trader_ids: list[str]) -> None:

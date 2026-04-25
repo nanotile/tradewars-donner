@@ -15,12 +15,14 @@
           <span class="duration-label">Duration (min)</span>
           <input class="duration-input" id="duration-minutes" type="number" value="12" min="1" max="240" step="1" />
         </label>
-        <label class="switch-field">
-          <span class="switch-caption">Max mode</span>
-          <input class="switch-input" id="toggle-max" type="checkbox" />
-          <span class="switch-track"></span>
-        </label>
-        <ul class="roster" id="roster"></ul>
+        <div class="slots" id="slots"></div>
+        <div class="presets">
+          <span class="presets-label">Presets</span>
+          <div class="presets-buttons">
+            <button class="btn btn-secondary preset-btn" id="preset-eco" type="button">Eco</button>
+            <button class="btn btn-secondary preset-btn" id="preset-max" type="button">Max</button>
+          </div>
+        </div>
         <button class="btn btn-primary" id="btn-start">Start</button>
         <button class="btn btn-secondary" id="btn-stop" disabled>Stop</button>
       </div>

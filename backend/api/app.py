@@ -1,6 +1,7 @@
 """FastAPI app fronting the Arena.
 
 Endpoints:
+  GET  /arena/config   — model catalog + presets + duration / max_tokens
   POST /arena/start    — reset + launch traders, return started snapshot
   POST /arena/stop     — manual end, return final snapshot
   POST /arena/tick     — UI heartbeat, return current snapshot
@@ -21,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from backend.arena.arena import Arena, ArenaConfig, DEFAULT_CONFIG_PATH, reasoning_label
+from backend.arena.arena import Arena, ArenaConfig, DEFAULT_CONFIG_PATH
 from backend.environment.accounts import Accounts
 from backend.environment.prices import Prices
 
@@ -32,6 +33,13 @@ _FRONTEND_DIST_CANDIDATES = [
     Path(__file__).resolve().parents[2] / "frontend" / "dist",
 ]
 
+DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "backend" / "environment" / "tradewars.sqlite"
+
+
+class TraderSelection(BaseModel):
+    model_id: str = Field(..., description="Key in config.json's `models` map.")
+    reasoning_label: str = Field(..., description="Must match one of the model's reasoning_options.label.")
+
 
 class StartRequest(BaseModel):
     duration_seconds: float | None = Field(
@@ -39,12 +47,10 @@ class StartRequest(BaseModel):
         gt=0,
         description="Optional override for game length. Falls back to config.",
     )
-    max_mode: bool = Field(
-        default=False,
-        description="True → max-reasoning models; False → eco (cheap) models.",
+    selections: list[TraderSelection] | None = Field(
+        default=None,
+        description="One per slot, in order. If omitted, the `max` preset is used.",
     )
-
-DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "backend" / "environment" / "tradewars.sqlite"
 
 
 class ArenaHolder:
@@ -65,9 +71,12 @@ class ArenaHolder:
         self,
         *,
         duration_override: float | None = None,
-        max_mode: bool = False,
+        selections: list[dict] | None = None,
     ) -> Arena:
-        config = ArenaConfig.load(self.config_path, max_mode=max_mode)
+        config = ArenaConfig.load(self.config_path)
+        sel = selections if selections is not None else config.preset_selections("max")
+        traders = config.from_selections(sel)
+        config = config.with_traders(traders)
         if duration_override is not None:
             config.duration_seconds = duration_override
         self.arena = Arena(config=config, accounts=self.accounts, prices=self.prices)
@@ -84,40 +93,31 @@ def create_app(holder: ArenaHolder | None = None) -> FastAPI:
     holder = holder or ArenaHolder()
     app.state.arena_holder = holder
 
+    @app.get("/arena/config")
+    def get_config() -> dict:
+        """Catalog + presets so the sidebar can populate dropdowns."""
+        return json.loads(Path(holder.config_path).read_text())
+
     @app.post("/arena/start")
     async def start(body: StartRequest | None = None) -> dict:
         if holder.arena is not None and holder.arena._final_snapshot is None:
             raise HTTPException(status_code=409, detail="Arena already running")
         body = body or StartRequest()
-        arena = holder.new_arena(
-            duration_override=body.duration_seconds,
-            max_mode=body.max_mode,
+        selections = (
+            [s.model_dump() for s in body.selections] if body.selections is not None else None
         )
+        try:
+            arena = holder.new_arena(
+                duration_override=body.duration_seconds,
+                selections=selections,
+            )
+        except KeyError as e:
+            raise HTTPException(status_code=400, detail=f"Unknown selection: {e}") from e
+        except StopIteration as e:
+            raise HTTPException(status_code=400, detail="Unknown reasoning_label for model") from e
         await arena.start()
         snap = await arena.tick()
         return asdict(snap)
-
-    @app.get("/arena/config")
-    def get_config() -> dict:
-        """Return both max and eco variants so the UI can preview the line-up."""
-        data = json.loads(Path(holder.config_path).read_text())
-        return {
-            "duration_seconds": data["duration_seconds"],
-            "traders": [
-                {
-                    "id": t["id"],
-                    "max": {
-                        "display_name": t["max"]["display_name"],
-                        "reasoning_label": reasoning_label(t["max"]["reasoning"]),
-                    },
-                    "eco": {
-                        "display_name": t["eco"]["display_name"],
-                        "reasoning_label": reasoning_label(t["eco"]["reasoning"]),
-                    },
-                }
-                for t in data["traders"]
-            ],
-        }
 
     @app.post("/arena/stop")
     async def stop() -> dict:
@@ -152,4 +152,3 @@ def create_app(holder: ArenaHolder | None = None) -> FastAPI:
             break
 
     return app
-

@@ -126,92 +126,91 @@ body {
   opacity: 0.5;
 }
 
-/* Max-mode pill switch */
-.switch-field {
+/* Slot pickers — model dropdown + reasoning button row, one card per slot. */
+.slots {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  cursor: pointer;
-  user-select: none;
-}
-.switch-caption {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--fg-muted);
-  flex: 1;
-}
-.switch-input {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-}
-.switch-track {
-  position: relative;
-  width: 36px;
-  height: 20px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--bg-sunk);
-  flex: 0 0 auto;
-  transition: background 120ms, border-color 120ms;
-}
-.switch-track::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--fg-muted);
-  transition: transform 140ms, background 140ms;
-}
-.switch-input:checked ~ .switch-track {
-  background: color-mix(in srgb, var(--purple) 50%, var(--bg-sunk));
-  border-color: var(--purple);
-}
-.switch-input:checked ~ .switch-track::after {
-  transform: translateX(16px);
-  background: var(--yellow);
-}
-.switch-input:focus-visible ~ .switch-track {
-  outline: 2px solid var(--blue);
-  outline-offset: 2px;
-}
-.switch-field:has(.switch-input:disabled) {
-  opacity: 0.5;
-  cursor: not-allowed;
+  flex-direction: column;
+  gap: 8px;
 }
 
-/* Sidebar roster preview */
-.roster {
-  list-style: none;
-  margin: 0;
-  padding: 8px 10px;
-  background: var(--bg-sunk);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+.slot {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 11px;
-  line-height: 1.3;
+  padding: 8px;
+  background: var(--bg-sunk);
+  border: 1px solid var(--border);
+  border-radius: 6px;
 }
-.roster-item {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-.roster-name {
+
+.slot-model {
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg);
   color: var(--fg);
-  font-weight: 500;
+  appearance: none;
+  width: 100%;
+  cursor: pointer;
 }
-.roster-effort {
-  color: var(--fg-dim);
+.slot-model:focus { outline: none; border-color: var(--blue); }
+.slot-model:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.slot-reasoning {
+  display: flex;
+  gap: 4px;
+}
+
+.reasoning-btn {
+  font: inherit;
   font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  flex: 1;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+.reasoning-btn:hover:not(:disabled):not([data-active="true"]) {
+  border-color: var(--fg-muted);
+  color: var(--fg);
+}
+.reasoning-btn[data-active="true"] {
+  background: color-mix(in srgb, var(--purple) 25%, var(--bg-sunk));
+  border-color: var(--purple);
+  color: var(--fg);
+}
+.reasoning-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+/* Presets section */
+.presets {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.presets-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--fg-muted);
+}
+.presets-buttons {
+  display: flex;
+  gap: 6px;
+}
+.preset-btn {
+  flex: 1;
+  padding: 6px 0;
+  font-size: 12px;
 }
 
 .sidebar-spacer { flex: 1; }

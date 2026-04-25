@@ -39,24 +39,68 @@ def _now() -> datetime:
 
 @dataclass
 class ArenaConfig:
+    """Loaded `config.json` — a model catalog + presets. Knows nothing about
+    the four runtime traders until `from_selections()` resolves them."""
+
     duration_seconds: float
-    traders: list[TraderConfig]
+    traders: list[TraderConfig] = field(default_factory=list)
+    max_tokens: int = 64_000
+    models: dict[str, dict] = field(default_factory=dict)   # model_id → spec
+    presets: dict[str, list] = field(default_factory=dict)  # preset name → list of selections
 
     @classmethod
-    def load(cls, path: Path | str = DEFAULT_CONFIG_PATH, *, max_mode: bool = True) -> "ArenaConfig":
+    def load(cls, path: Path | str = DEFAULT_CONFIG_PATH) -> "ArenaConfig":
         data = json.loads(Path(path).read_text())
-        traders = [
-            TraderConfig(
-                id=t["id"],
-                max_tokens=int(t["max_tokens"]),
-                **t["max" if max_mode else "eco"],
-            )
-            for t in data["traders"]
-        ]
         return cls(
             duration_seconds=float(data["duration_seconds"]),
+            max_tokens=int(data["max_tokens"]),
+            models=data["models"],
+            presets=data["presets"],
+        )
+
+    def with_traders(self, traders: list[TraderConfig]) -> "ArenaConfig":
+        """Return a new config carrying a resolved set of traders for a game."""
+        return ArenaConfig(
+            duration_seconds=self.duration_seconds,
+            max_tokens=self.max_tokens,
+            models=self.models,
+            presets=self.presets,
             traders=traders,
         )
+
+    def from_selections(self, selections: list[dict]) -> list[TraderConfig]:
+        """Resolve a list of `{model_id, reasoning_label}` into TraderConfigs.
+
+        - id = "<display_name> (<reasoning_label>)" with " #N" suffix added
+          when later slots collide with an earlier one.
+        - display_name + reasoning are pulled from the catalog entry.
+        """
+        used: dict[str, int] = {}
+        traders: list[TraderConfig] = []
+        for sel in selections:
+            spec = self.models[sel["model_id"]]
+            label = sel["reasoning_label"]
+            reasoning = next(
+                opt["reasoning"] for opt in spec["reasoning_options"] if opt["label"] == label
+            )
+            base_id = f"{spec['display_name']} ({label})"
+            count = used.get(base_id, 0) + 1
+            used[base_id] = count
+            trader_id = base_id if count == 1 else f"{base_id} #{count}"
+            traders.append(TraderConfig(
+                id=trader_id,
+                display_name=spec["display_name"],
+                provider=spec["provider"],
+                model=spec["model"],
+                reasoning=reasoning,
+                max_tokens=self.max_tokens,
+            ))
+        return traders
+
+    def preset_selections(self, name: str) -> list[dict]:
+        if name not in self.presets:
+            raise KeyError(f"Unknown preset: {name}")
+        return list(self.presets[name])
 
 
 def reasoning_label(reasoning: dict) -> str:

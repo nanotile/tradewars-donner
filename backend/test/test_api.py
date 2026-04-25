@@ -16,9 +16,8 @@ from fastapi.testclient import TestClient
 
 from backend.api.app import ArenaHolder, create_app
 from backend.arena import arena as arena_mod
-from backend.arena.arena import ArenaConfig, DEFAULT_CONFIG_PATH
+from backend.arena.arena import DEFAULT_CONFIG_PATH
 from backend.environment.accounts import Accounts
-from backend.traders.models import TraderConfig
 
 
 class _FakePrices:
@@ -43,36 +42,14 @@ def neutralize_trader_loop(monkeypatch):
 
 @pytest.fixture
 def holder(tmp_path):
-    """ArenaHolder backed by in-memory accounts + fake prices + test config."""
-    config = ArenaConfig(
-        duration_seconds=600.0,
-        traders=[
-            TraderConfig(
-                id=f"t{i}", display_name=f"T{i}",
-                provider="openai", model="gpt-5.4",
-                reasoning={"effort": "low"}, max_tokens=1000,
-            )
-            for i in range(4)
-        ],
-    )
+    """Real ArenaHolder pointed at the real config catalog, but with an
+    in-memory accounts DB and fake price feed."""
     h = ArenaHolder.__new__(ArenaHolder)
-    h.config_path = tmp_path / "unused.json"
+    h.config_path = DEFAULT_CONFIG_PATH
     h.db_path = tmp_path / "test.sqlite"
     h.accounts = Accounts(":memory:")
     h.prices = _FakePrices({})
     h.arena = None
-    # Override new_arena to use our injected config without reading JSON.
-    def _new_arena(*, duration_override=None, max_mode=False):
-        from backend.arena.arena import Arena, ArenaConfig
-        _ = max_mode  # fake holder always serves the same test config
-        cfg = ArenaConfig(
-            duration_seconds=duration_override if duration_override is not None else config.duration_seconds,
-            traders=config.traders,
-        )
-        h.arena = Arena(config=cfg, accounts=h.accounts, prices=h.prices)
-        return h.arena
-    h.new_arena = _new_arena
-    h.config_path = DEFAULT_CONFIG_PATH  # /arena/config reads the real JSON
     yield h
     h.accounts.close()
 
@@ -84,24 +61,95 @@ def client(holder):
         yield c
 
 
+# ---- /arena/config ----
+
+def test_config_returns_catalog_with_expected_models(client):
+    r = client.get("/arena/config")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["duration_seconds"] == 720
+    assert body["max_tokens"] == 64_000
+    assert "claude-opus-4-7" in body["models"]
+    assert body["models"]["claude-opus-4-7"]["display_name"] == "Claude Opus 4.7"
+    assert "max" in body["presets"]
+    assert "eco" in body["presets"]
+    assert len(body["presets"]["max"]) == 4
+
+
+# ---- /arena/start ----
+
 def test_tick_before_start_returns_409(client):
-    r = client.post("/arena/tick")
-    assert r.status_code == 409
+    assert client.post("/arena/tick").status_code == 409
 
 
-def test_start_returns_initial_snapshot(client):
+def test_start_with_no_body_uses_max_preset(client):
     r = client.post("/arena/start")
     assert r.status_code == 200
     snap = r.json()
-    assert snap["running"] is True
     assert len(snap["traders"]) == 4
-    assert all(t["cash"] == 1_000_000.0 for t in snap["traders"])
+    ids = {t["trader_id"] for t in snap["traders"]}
+    assert ids == {
+        "Claude Opus 4.7 (max)",
+        "GPT 5.5 (xhigh)",
+        "Gemini 3.1 Pro Preview (32k)",
+        "DeepSeek V4 Pro (max)",
+    }
+
+
+def test_start_with_custom_selections(client):
+    selections = [
+        {"model_id": "kimi-k2-6", "reasoning_label": "xhigh"},
+        {"model_id": "kimi-k2-6", "reasoning_label": "low"},
+        {"model_id": "claude-haiku-4-5", "reasoning_label": "low"},
+        {"model_id": "deepseek-v4-flash", "reasoning_label": "off"},
+    ]
+    r = client.post("/arena/start", json={"selections": selections})
+    assert r.status_code == 200
+    snap = r.json()
+    assert [t["trader_id"] for t in snap["traders"]] == [
+        "Kimi K2.6 (xhigh)",
+        "Kimi K2.6 (low)",
+        "Claude Haiku 4.5 (low)",
+        "DeepSeek V4 Flash (off)",
+    ]
+
+
+def test_start_with_duplicate_models_disambiguates_with_hash(client):
+    r = client.post("/arena/start", json={
+        "selections": [
+            {"model_id": "kimi-k2-6", "reasoning_label": "xhigh"},
+            {"model_id": "kimi-k2-6", "reasoning_label": "xhigh"},
+            {"model_id": "kimi-k2-6", "reasoning_label": "xhigh"},
+            {"model_id": "kimi-k2-6", "reasoning_label": "low"},
+        ],
+    })
+    assert r.status_code == 200
+    snap = r.json()
+    assert [t["trader_id"] for t in snap["traders"]] == [
+        "Kimi K2.6 (xhigh)",
+        "Kimi K2.6 (xhigh) #2",
+        "Kimi K2.6 (xhigh) #3",
+        "Kimi K2.6 (low)",
+    ]
+
+
+def test_start_with_unknown_model_id_400(client):
+    r = client.post("/arena/start", json={
+        "selections": [{"model_id": "imaginary", "reasoning_label": "max"}] * 4,
+    })
+    assert r.status_code == 400
+
+
+def test_start_with_unknown_reasoning_label_400(client):
+    r = client.post("/arena/start", json={
+        "selections": [{"model_id": "claude-opus-4-7", "reasoning_label": "ultra"}] * 4,
+    })
+    assert r.status_code == 400
 
 
 def test_start_twice_returns_409(client):
     assert client.post("/arena/start").status_code == 200
-    r = client.post("/arena/start")
-    assert r.status_code == 409
+    assert client.post("/arena/start").status_code == 409
 
 
 def test_start_with_duration_override(client, holder):
@@ -113,48 +161,31 @@ def test_start_with_duration_override(client, holder):
 
 
 def test_start_rejects_non_positive_duration(client):
-    r = client.post("/arena/start", json={"duration_seconds": 0})
-    assert r.status_code == 422
-    r = client.post("/arena/start", json={"duration_seconds": -5})
-    assert r.status_code == 422
+    assert client.post("/arena/start", json={"duration_seconds": 0}).status_code == 422
+    assert client.post("/arena/start", json={"duration_seconds": -5}).status_code == 422
 
 
-def test_arena_config_returns_both_variants(client):
-    r = client.get("/arena/config")
-    assert r.status_code == 200
-    body = r.json()
-    assert len(body["traders"]) == 4
-    claude = next(t for t in body["traders"] if t["id"] == "claude")
-    assert claude["max"]["display_name"] == "Claude Opus 4.7"
-    assert claude["max"]["reasoning_label"] == "max"
-    assert claude["eco"]["display_name"] == "Claude Haiku 4.5"
-    assert claude["eco"]["reasoning_label"] == "low"
-    gemini = next(t for t in body["traders"] if t["id"] == "gemini")
-    assert gemini["max"]["reasoning_label"] == "32k"
-
-
-def test_start_snapshot_carries_reasoning_label(client):
+def test_start_snapshot_carries_reasoning_label_and_display_name(client):
     r = client.post("/arena/start")
-    assert r.status_code == 200
     snap = r.json()
-    for t in snap["traders"]:
-        assert "reasoning_label" in t and t["reasoning_label"]
+    by_id = {t["trader_id"]: t for t in snap["traders"]}
+    assert by_id["Claude Opus 4.7 (max)"]["display_name"] == "Claude Opus 4.7"
+    assert by_id["Claude Opus 4.7 (max)"]["reasoning_label"] == "max"
+    assert by_id["Gemini 3.1 Pro Preview (32k)"]["reasoning_label"] == "32k"
 
+
+# ---- /arena/tick + /arena/stop ----
 
 def test_tick_returns_running_snapshot(client):
     client.post("/arena/start")
-    r = client.post("/arena/tick")
-    assert r.status_code == 200
-    snap = r.json()
+    snap = client.post("/arena/tick").json()
     assert snap["running"] is True
     assert len(snap["traders"]) == 4
 
 
 def test_stop_returns_final_snapshot_and_records_game(client, holder):
     client.post("/arena/start")
-    r = client.post("/arena/stop")
-    assert r.status_code == 200
-    snap = r.json()
+    snap = client.post("/arena/stop").json()
     assert snap["running"] is False
     assert len(holder.accounts.list_games()) == 1
 
@@ -169,13 +200,12 @@ def test_stop_is_idempotent(client):
 def test_start_after_end_starts_a_new_game(client, holder):
     client.post("/arena/start")
     client.post("/arena/stop")
-    # A completed arena should allow a fresh start.
-    r = client.post("/arena/start")
-    assert r.status_code == 200
-    # Two games recorded now.
+    assert client.post("/arena/start").status_code == 200
     client.post("/arena/stop")
     assert len(holder.accounts.list_games()) == 2
 
+
+# ---- /arena/stream ----
 
 async def test_stream_yields_sse_frame_for_queued_event(holder):
     """Call the /arena/stream endpoint handler directly and pull one frame.
@@ -184,28 +214,24 @@ async def test_stream_yields_sse_frame_for_queued_event(holder):
     against a never-ending generator); exercising the generator is a cleaner
     and faster unit test of the framing.
     """
-    from backend.api.app import create_app
     from backend.traders.trader import TraderEvent
 
-    create_app(holder=holder)  # builds routes; we reach into the arena directly
+    create_app(holder=holder)
     holder.new_arena()
     await holder.arena.start()
+
+    fake_id = holder.arena.config.traders[0].id
     holder.arena.events.put_nowait(TraderEvent(
-        trader_id="t0", type="tool_called",
-        timestamp="2026-04-24T00:00:00+00:00",
+        trader_id=fake_id, type="tool_called",
+        timestamp="2026-04-25T00:00:00+00:00",
         payload={"tool": "trade"},
     ))
 
     async for event in holder.arena.stream():
-        frame = {"event": event.type, "data": json.loads(json.dumps(event_to_dict(event)))}
+        from dataclasses import asdict
+        frame = {"event": event.type, "data": json.loads(json.dumps(asdict(event)))}
         assert frame["event"] == "tool_called"
-        assert frame["data"]["trader_id"] == "t0"
-        assert frame["data"]["payload"]["tool"] == "trade"
+        assert frame["data"]["trader_id"] == fake_id
         break
 
     await holder.arena.end()
-
-
-def event_to_dict(event):
-    from dataclasses import asdict
-    return asdict(event)
