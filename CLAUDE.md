@@ -4,7 +4,54 @@ See this for the plan:
 
 @PLAN.md
 
-## Working code strategies (confirmed in Phase 2)
+## Running locally
+
+**Dev (fast inner loop):**
+```bash
+# terminal 1 — backend with auto-reload via uvicorn
+uv run uvicorn --factory backend.api.app:create_app --port 8000
+
+# terminal 2 — frontend with HMR; vite proxies /arena/* to :8000
+cd frontend && npm run dev
+# → http://localhost:5173
+```
+
+**Container (single port, prod-like):**
+```bash
+./scripts/start_mac.sh     # builds image, runs with --env-file .env
+# → http://localhost:8000
+./scripts/stop_mac.sh
+```
+
+**Tests:**
+```bash
+uv run pytest                 # 82 unit tests (~4 s)
+uv run pytest -m integration  # opt-in 90 s real arena via gpt-oss-120b
+```
+
+The integration test is gated behind the `integration` marker (see `pyproject.toml`'s `addopts`) so it doesn't fire on every `pytest` run — it spawns real MCP subprocesses and hits OpenRouter + Massive.
+
+## Repo layout
+
+```
+backend/
+  environment/   accounts.py (SQLite), prices.py (Massive REST)
+  traders/       templates.py (system prompt), models.py (provider factory),
+                 mcp_servers.py (MCP factories), tools.py (get_state/trade),
+                 trader.py (decision-cycle loop)
+  arena/         arena.py (lifecycle), config.json (max+eco variants)
+  api/           app.py (FastAPI: /arena/start|stop|tick|stream|config)
+  test/          pytest suite + integration test
+frontend/
+  src/           api.ts, state.ts, theme.ts, topbar.ts, chart.ts (uPlot),
+                 heatmap.ts, log.ts, panel.ts, main.ts, styles.css
+  index.html     sidebar (clock/duration/max-mode/roster/buttons) + 2×2 panels
+  vite.config.ts dev proxy to :8000
+scripts/         start_mac.sh, stop_mac.sh
+Dockerfile       multi-stage (node frontend build → python+uv runtime)
+```
+
+## Working code strategies
 
 ### MCP stdio servers (via OpenAI Agents SDK)
 
