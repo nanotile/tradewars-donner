@@ -13,6 +13,7 @@ call, tool output, assistant message, cycle boundary, and error.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -22,20 +23,41 @@ from agents import Agent, Runner
 
 from backend.traders.mcp_servers import make_massive_mcp, make_memory_mcp
 from backend.traders.models import TraderConfig, build_model, build_model_settings
-from backend.traders.templates import SYSTEM_PROMPT, render_cycle_input
+from backend.traders.templates import render_cycle_input, render_system_prompt
 from backend.traders.tools import TraderContext, get_state, trade
 
 logger = logging.getLogger(__name__)
 
-MAX_TURNS_PER_CYCLE = 40
+MAX_TURNS_PER_CYCLE = 200
 RATIONALE_MAX_CHARS = 800
 TOOL_OUTPUT_PREVIEW_CHARS = 2000
-INTER_CYCLE_SLEEP_SECONDS = 0.05
+INTER_CYCLE_SLEEP_SECONDS = 10.0
 ERROR_BACKOFF_SECONDS = 2.0
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _format_output(out: Any) -> str:
+    """Flatten an SDK tool output to a human-readable string.
+
+    MCP tools return `[{"type": "input_text", "text": "..."}]` content parts;
+    plain function tools return dicts or strings. Strip the wrapper so the
+    frontend sees real text, not `str(list_of_dicts)` Python repr noise.
+    """
+    if out is None:
+        return ""
+    if isinstance(out, list):
+        return "\n".join(_format_output(item) for item in out)
+    if isinstance(out, dict):
+        if out.get("type") == "input_text" and "text" in out:
+            return str(out["text"])
+        try:
+            return json.dumps(out, default=str)
+        except (TypeError, ValueError):
+            return str(out)
+    return str(out)
 
 
 @dataclass
@@ -106,7 +128,7 @@ class Trader:
             })
         elif name == "tool_output":
             out = raw.get("output") if isinstance(raw, dict) else getattr(raw, "output", None)
-            await self._emit("tool_output", {"output": str(out)[:TOOL_OUTPUT_PREVIEW_CHARS]})
+            await self._emit("tool_output", {"output": _format_output(out)[:TOOL_OUTPUT_PREVIEW_CHARS]})
         elif name == "message_output_created":
             content = getattr(raw, "content", None) or []
             texts = [getattr(p, "text", None) for p in content]
@@ -120,7 +142,7 @@ class Trader:
         async with massive, memory:
             agent = Agent[TraderContext](
                 name=self.config.display_name,
-                instructions=SYSTEM_PROMPT,
+                instructions=render_system_prompt(self.context.duration_seconds),
                 model=build_model(self.config),
                 model_settings=build_model_settings(self.config),
                 mcp_servers=[massive, memory],

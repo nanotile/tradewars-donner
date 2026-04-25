@@ -255,12 +255,21 @@ Each phase must validate before moving to the next — small, incremental steps.
 - `backend/test/test_api.py` — 8 tests via FastAPI's TestClient with the trader loop neutralized (no MCPs, no LLMs). Covers start/tick/stop shapes, 409 guards, idempotent stop, start-after-end (new game), SSE frame shape.
 - Uvicorn launch: `uv run uvicorn --factory backend.api.app:create_app`. `curl` smoke confirms `/arena/tick` and `/arena/stop` return 409 before start and `/docs` + `/openapi.json` are reachable.
 
-### Phase 7 — Frontend
-- Vite + vanilla TS, uPlot for charts.
-- Dark-default with light toggle.
-- 2×2 trader panels with value / chart / key facts / holdings heatmap / log trace.
-- SSE client for live logs; 1 Hz tick client for price/PnL refresh.
-- Drive a real arena from the UI end-to-end.
+### Phase 7 — Frontend ✅ scaffold complete
+- Vite + vanilla TS (no framework), uPlot for charts. One dependency in `frontend/package.json` (uplot), vite + typescript as dev deps.
+- `frontend/src/` modules:
+  - `api.ts` — typed `startArena`/`stopArena`/`tickArena`/`openStream` over the backend's 4 endpoints.
+  - `state.ts` — `TraderState` with 12s-bucket chart downsampling (caps at ~300 points per hour), 100-entry bounded log, previous-price memory for heatmap flashing.
+  - `theme.ts` / `topbar.ts` — dark-default theme toggle persisted to localStorage; Start/Stop buttons + MM:SS clock.
+  - `chart.ts` — uPlot wrapper (spline, CSS-variable-driven colors, auto-resize via ResizeObserver).
+  - `heatmap.ts` — flex tiles sized by market_value, colored by unrealized_pnl, flash animation on price change.
+  - `log.ts` — bounded per-trader SSE trace with type labels.
+  - `panel.ts` — per-trader panel composing value/chart/facts/heatmap/log.
+  - `main.ts` — orchestrator: Start triggers `/arena/start`, hydrates panels from the snapshot, opens SSE, and kicks off a 1 Hz `/arena/tick` loop. Stop calls `/arena/stop`, tears down streams and timers. `!running` snapshots also trigger teardown (auto-end at 60:00 wins through the same path).
+  - `styles.css` — dark-default palette exactly matching PLAN (#ecad0a / #209dd7 / #753991 + greys), no gradients, CSS `color-mix` for heatmap tints, `@keyframes flash-up/flash-down` for the price-flash.
+- `vite.config.ts` proxies `/arena/*` to `http://127.0.0.1:8000` in dev, so frontend + backend can run independently.
+- Production build clean: `npm run build` → 62 KB JS / 6 KB CSS gzipped ~26 KB total, no TS errors, strict `tsc` passes.
+- Smoke test: backend on :8000 + vite on :5173 both came up, frontend HTML served, `POST /arena/tick` via Vite proxy returned the expected `409` from the backend. End-to-end interactive test in a browser is the user's to run (no browser from here).
 
 ### Phase 8 — Docker
 - Single `Dockerfile` at project root. Multi-stage: build the static frontend, install the uv-managed backend, serve frontend at `/` and backend routes from the same FastAPI app.

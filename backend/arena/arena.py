@@ -43,18 +43,44 @@ class ArenaConfig:
     traders: list[TraderConfig]
 
     @classmethod
-    def load(cls, path: Path | str = DEFAULT_CONFIG_PATH) -> "ArenaConfig":
+    def load(cls, path: Path | str = DEFAULT_CONFIG_PATH, *, max_mode: bool = True) -> "ArenaConfig":
         data = json.loads(Path(path).read_text())
+        traders = [
+            TraderConfig(
+                id=t["id"],
+                max_tokens=int(t["max_tokens"]),
+                **t["max" if max_mode else "eco"],
+            )
+            for t in data["traders"]
+        ]
         return cls(
             duration_seconds=float(data["duration_seconds"]),
-            traders=[TraderConfig(**t) for t in data["traders"]],
+            traders=traders,
         )
+
+
+def reasoning_label(reasoning: dict) -> str:
+    """Short human-readable summary of a reasoning config, e.g. 'max', '32k', 'off'."""
+    if "effort" in reasoning:
+        return str(reasoning["effort"])
+    if "budget_tokens" in reasoning:
+        n = int(reasoning["budget_tokens"])
+        return f"{n // 1000}k" if n >= 1000 else str(n)
+    thinking = reasoning.get("thinking")
+    if isinstance(thinking, dict):
+        t = thinking.get("type")
+        if t == "disabled":
+            return "off"
+        if t == "enabled":
+            return "on"
+    return ""
 
 
 @dataclass
 class TraderSnapshot:
     trader_id: str
     display_name: str
+    reasoning_label: str
     cash: float
     holdings: dict[str, dict[str, float]]  # ticker → {quantity, avg_cost, current_price, market_value, unrealized_pnl}
     total_portfolio_value: float
@@ -196,6 +222,7 @@ class Arena:
             traders_snap.append(TraderSnapshot(
                 trader_id=cfg.id,
                 display_name=cfg.display_name,
+                reasoning_label=reasoning_label(cfg.reasoning),
                 cash=self.accounts.cash(cfg.id),
                 holdings=detail,
                 total_portfolio_value=value,

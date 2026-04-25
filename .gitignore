@@ -210,3 +210,11 @@ __marimo__/
 backend/environment/*.sqlite
 backend/environment/*.sqlite-journal
 backend/environment/memory/
+
+# Frontend build artefacts
+frontend/dist/
+frontend/node_modules/
+# Stale .js next to .ts in src/ confuses Vite — never check them in.
+frontend/src/*.js
+frontend/src/*.js.map
+frontend/tsconfig.tsbuildinfo

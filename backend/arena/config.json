@@ -1,37 +1,69 @@
 {
-  "duration_seconds": 3600,
+  "duration_seconds": 720,
   "traders": [
     {
       "id": "claude",
-      "display_name": "Claude",
-      "provider": "anthropic",
-      "model": "anthropic/claude-opus-4-7",
-      "reasoning": {"effort": "max"},
-      "max_tokens": 64000
+      "max_tokens": 64000,
+      "max": {
+        "display_name": "Claude Opus 4.7",
+        "provider": "anthropic",
+        "model": "anthropic/claude-opus-4-7",
+        "reasoning": {"effort": "max"}
+      },
+      "eco": {
+        "display_name": "Claude Haiku 4.5",
+        "provider": "anthropic",
+        "model": "anthropic/claude-haiku-4-5",
+        "reasoning": {"effort": "low", "budget_tokens": 1024}
+      }
     },
     {
       "id": "gpt",
-      "display_name": "GPT",
-      "provider": "openai",
-      "model": "gpt-5.4",
-      "reasoning": {"effort": "xhigh"},
-      "max_tokens": 64000
+      "max_tokens": 64000,
+      "max": {
+        "display_name": "GPT 5.5",
+        "provider": "openai",
+        "model": "gpt-5.5",
+        "reasoning": {"effort": "xhigh"}
+      },
+      "eco": {
+        "display_name": "GPT 5.4-mini",
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "reasoning": {"effort": "none"}
+      }
     },
     {
-      "id": "kimi",
-      "display_name": "Kimi",
-      "provider": "openrouter",
-      "model": "moonshotai/kimi-k2.6",
-      "reasoning": {"effort": "xhigh"},
-      "max_tokens": 64000
+      "id": "gemini",
+      "max_tokens": 64000,
+      "max": {
+        "display_name": "Gemini 3.1 Pro Preview",
+        "provider": "google",
+        "model": "gemini/gemini-3.1-pro-preview",
+        "reasoning": {"budget_tokens": 32000}
+      },
+      "eco": {
+        "display_name": "Gemini 3.1 Flash-Lite Preview",
+        "provider": "google",
+        "model": "gemini/gemini-3.1-flash-lite-preview",
+        "reasoning": {"effort": "low"}
+      }
     },
     {
       "id": "deepseek",
-      "display_name": "DeepSeek",
-      "provider": "openrouter",
-      "model": "deepseek/deepseek-v4-pro",
-      "reasoning": {"effort": "xhigh"},
-      "max_tokens": 64000
+      "max_tokens": 64000,
+      "max": {
+        "display_name": "DeepSeek V4 Pro",
+        "provider": "deepseek",
+        "model": "deepseek-v4-pro",
+        "reasoning": {"effort": "max", "thinking": {"type": "enabled"}}
+      },
+      "eco": {
+        "display_name": "DeepSeek V4 Flash",
+        "provider": "deepseek",
+        "model": "deepseek-v4-flash",
+        "reasoning": {"thinking": {"type": "disabled"}}
+      }
     }
   ]
 }

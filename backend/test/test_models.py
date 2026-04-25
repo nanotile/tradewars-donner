@@ -17,6 +17,8 @@ def api_keys_for_factory(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "dummy")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy")
     monkeypatch.setenv("OPENROUTER_API_KEY", "dummy")
+    monkeypatch.setenv("GOOGLE_API_KEY", "dummy")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "dummy")
 
 
 def test_openai_build_model_returns_model_id_string():
@@ -71,7 +73,93 @@ def test_anthropic_settings_use_adaptive_thinking_with_effort():
     assert s.extra_args == {
         "thinking": {"type": "adaptive"},
         "output_config": {"effort": "max"},
+        # Anthropic's 2026 automatic prompt caching — top-level opt-in.
+        "cache_control": {"type": "ephemeral"},
     }
+
+
+def test_anthropic_settings_use_enabled_thinking_when_budget_tokens_given():
+    """Haiku 4.5 (and Sonnet) reject adaptive thinking; fall back to enabled form."""
+    cfg = TraderConfig(
+        id="claude", display_name="Claude Haiku 4.5",
+        provider="anthropic", model="anthropic/claude-haiku-4-5",
+        reasoning={"effort": "low", "budget_tokens": 1024}, max_tokens=64_000,
+    )
+    s = build_model_settings(cfg)
+    assert s.extra_args == {
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+        "cache_control": {"type": "ephemeral"},
+    }
+
+
+def test_google_build_model_returns_litellm_model():
+    from agents.extensions.models.litellm_model import LitellmModel
+
+    cfg = TraderConfig(
+        id="gemini", display_name="Gemini 3.1 Pro Preview",
+        provider="google", model="gemini/gemini-3.1-pro-preview",
+        reasoning={"effort": "high"}, max_tokens=64_000,
+    )
+    assert isinstance(build_model(cfg), LitellmModel)
+
+
+def test_google_settings_pass_explicit_thinking_budget_via_extra_args():
+    cfg = TraderConfig(
+        id="gemini", display_name="Gemini 3.1 Pro Preview",
+        provider="google", model="gemini/gemini-3.1-pro-preview",
+        reasoning={"budget_tokens": 32_000}, max_tokens=64_000,
+    )
+    s = build_model_settings(cfg)
+    assert s.max_tokens == 64_000
+    assert s.reasoning is None
+    assert s.extra_args == {
+        "thinking": {"type": "enabled", "budget_tokens": 32_000},
+    }
+
+
+def test_google_settings_fall_back_to_reasoning_effort_for_effort_shape():
+    cfg = TraderConfig(
+        id="gemini", display_name="Gemini",
+        provider="google", model="gemini/gemini-2.5-pro",
+        reasoning={"effort": "high"}, max_tokens=64_000,
+    )
+    s = build_model_settings(cfg)
+    assert s.extra_args == {"reasoning_effort": "high"}
+
+
+def test_deepseek_build_model_returns_chat_completions_model():
+    cfg = TraderConfig(
+        id="deepseek", display_name="DeepSeek V4 Pro",
+        provider="deepseek", model="deepseek-v4-pro",
+        reasoning={"effort": "max", "thinking": {"type": "enabled"}}, max_tokens=64_000,
+    )
+    model = build_model(cfg)
+    assert isinstance(model, OpenAIChatCompletionsModel)
+
+
+def test_deepseek_max_mode_sends_effort_and_thinking_in_body():
+    cfg = TraderConfig(
+        id="deepseek", display_name="DeepSeek V4 Pro",
+        provider="deepseek", model="deepseek-v4-pro",
+        reasoning={"effort": "max", "thinking": {"type": "enabled"}}, max_tokens=64_000,
+    )
+    s = build_model_settings(cfg)
+    assert s.max_tokens == 64_000
+    assert s.extra_body == {
+        "reasoning_effort": "max",
+        "thinking": {"type": "enabled"},
+    }
+
+
+def test_deepseek_eco_mode_sends_only_thinking_disabled():
+    cfg = TraderConfig(
+        id="deepseek", display_name="DeepSeek V4 Flash",
+        provider="deepseek", model="deepseek-v4-flash",
+        reasoning={"thinking": {"type": "disabled"}}, max_tokens=64_000,
+    )
+    s = build_model_settings(cfg)
+    assert s.max_tokens == 64_000
+    assert s.extra_body == {"thinking": {"type": "disabled"}}
 
 
 def test_openrouter_build_model_returns_chat_completions_model():

@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from backend.api.app import ArenaHolder, create_app
 from backend.arena import arena as arena_mod
-from backend.arena.arena import ArenaConfig
+from backend.arena.arena import ArenaConfig, DEFAULT_CONFIG_PATH
 from backend.environment.accounts import Accounts
 from backend.traders.models import TraderConfig
 
@@ -62,11 +62,17 @@ def holder(tmp_path):
     h.prices = _FakePrices({})
     h.arena = None
     # Override new_arena to use our injected config without reading JSON.
-    def _new_arena():
-        from backend.arena.arena import Arena
-        h.arena = Arena(config=config, accounts=h.accounts, prices=h.prices)
+    def _new_arena(*, duration_override=None, max_mode=False):
+        from backend.arena.arena import Arena, ArenaConfig
+        _ = max_mode  # fake holder always serves the same test config
+        cfg = ArenaConfig(
+            duration_seconds=duration_override if duration_override is not None else config.duration_seconds,
+            traders=config.traders,
+        )
+        h.arena = Arena(config=cfg, accounts=h.accounts, prices=h.prices)
         return h.arena
     h.new_arena = _new_arena
+    h.config_path = DEFAULT_CONFIG_PATH  # /arena/config reads the real JSON
     yield h
     h.accounts.close()
 
@@ -96,6 +102,43 @@ def test_start_twice_returns_409(client):
     assert client.post("/arena/start").status_code == 200
     r = client.post("/arena/start")
     assert r.status_code == 409
+
+
+def test_start_with_duration_override(client, holder):
+    r = client.post("/arena/start", json={"duration_seconds": 600})
+    assert r.status_code == 200
+    snap = r.json()
+    assert snap["time_elapsed_seconds"] + snap["time_remaining_seconds"] == 600
+    assert holder.arena.config.duration_seconds == 600
+
+
+def test_start_rejects_non_positive_duration(client):
+    r = client.post("/arena/start", json={"duration_seconds": 0})
+    assert r.status_code == 422
+    r = client.post("/arena/start", json={"duration_seconds": -5})
+    assert r.status_code == 422
+
+
+def test_arena_config_returns_both_variants(client):
+    r = client.get("/arena/config")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["traders"]) == 4
+    claude = next(t for t in body["traders"] if t["id"] == "claude")
+    assert claude["max"]["display_name"] == "Claude Opus 4.7"
+    assert claude["max"]["reasoning_label"] == "max"
+    assert claude["eco"]["display_name"] == "Claude Haiku 4.5"
+    assert claude["eco"]["reasoning_label"] == "low"
+    gemini = next(t for t in body["traders"] if t["id"] == "gemini")
+    assert gemini["max"]["reasoning_label"] == "32k"
+
+
+def test_start_snapshot_carries_reasoning_label(client):
+    r = client.post("/arena/start")
+    assert r.status_code == 200
+    snap = r.json()
+    for t in snap["traders"]:
+        assert "reasoning_label" in t and t["reasoning_label"]
 
 
 def test_tick_returns_running_snapshot(client):
