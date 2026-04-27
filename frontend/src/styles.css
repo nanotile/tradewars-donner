@@ -282,6 +282,39 @@ body {
   border-radius: 10px;
   min-height: 0;
   overflow: hidden;
+  transition: border-color 200ms, box-shadow 200ms, opacity 200ms;
+}
+
+/* Live leader during the game — thin yellow border. */
+.panel[data-leader="true"] {
+  border-color: var(--yellow);
+}
+
+/* End-of-game winner — solid yellow border, soft glow. */
+.panel[data-winner="true"] {
+  border-color: var(--yellow);
+  box-shadow: 0 0 0 1px var(--yellow), 0 0 24px color-mix(in srgb, var(--yellow) 40%, transparent);
+}
+
+/* End-of-game losers — subtle dim. */
+.panel[data-loser="true"] {
+  opacity: 0.7;
+}
+
+.panel-winner-pill {
+  display: none;
+  margin-top: 4px;
+  padding: 2px 10px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: #0f1115;
+  background: var(--yellow);
+  border-radius: 999px;
+}
+.panel[data-winner="true"] .panel-winner-pill {
+  display: inline-block;
 }
 
 .panel-log { min-height: 90px; }

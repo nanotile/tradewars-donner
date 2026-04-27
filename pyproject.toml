@@ -3,8 +3,11 @@ name = "tradewars"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+    "anthropic>=0.97.0",
     "fastapi>=0.136.1",
     "httpx>=0.28.1",
+    "ipykernel>=7.2.0",
+    "litellm[google]>=1.83.0",
     "massive>=2.5.0",
     "openai>=2.32.0",
     "openai-agents[litellm]>=0.14.5",
@@ -14,6 +17,7 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "requests>=2.33.1",
     "sse-starlette>=3.3.4",
+    "sympy>=1.14.0",
     "uvicorn>=0.46.0",
 ]
 

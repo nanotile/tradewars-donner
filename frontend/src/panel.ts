@@ -25,6 +25,7 @@ export class TraderPanel {
       <header class="panel-head">
         <span class="panel-name">${state.displayName}</span>
         <span class="panel-value" data-trend="flat">$0</span>
+        <span class="panel-winner-pill">Winner</span>
       </header>
       <div class="panel-chart"></div>
       <div class="panel-heatmap"></div>
@@ -42,6 +43,19 @@ export class TraderPanel {
     if (this.chart) return;
     const host = this.root.querySelector(".panel-chart") as HTMLElement;
     this.chart = new PortfolioChart(host, this.durationSeconds);
+  }
+
+  setLeader(isLeader: boolean): void {
+    if (isLeader) this.root.dataset.leader = "true";
+    else delete this.root.dataset.leader;
+  }
+
+  setEndState(state: "winner" | "loser" | null): void {
+    delete this.root.dataset.leader;
+    delete this.root.dataset.winner;
+    delete this.root.dataset.loser;
+    if (state === "winner") this.root.dataset.winner = "true";
+    else if (state === "loser") this.root.dataset.loser = "true";
   }
 
   update(): void {

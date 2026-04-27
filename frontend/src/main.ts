@@ -177,7 +177,37 @@ function applySnapshot(snap: ArenaSnapshot): void {
     state.recordSnapshot(t, snap.time_elapsed_seconds);
     panel.update();
   }
-  if (!snap.running) teardown();
+  if (snap.running) markLeaders(snap);
+  else {
+    markWinner(snap);
+    teardown();
+  }
+}
+
+function markLeaders(snap: ArenaSnapshot): void {
+  if (!snap.traders.length) return;
+  const top = Math.max(...snap.traders.map((t) => t.total_portfolio_value));
+  for (const t of snap.traders) {
+    panels.get(t.trader_id)?.setLeader(t.total_portfolio_value === top);
+  }
+}
+
+function markWinner(snap: ArenaSnapshot): void {
+  if (!snap.traders.length) return;
+  const ranked = [...snap.traders].sort(
+    (a, b) => b.total_portfolio_value - a.total_portfolio_value,
+  );
+  const winnerId = ranked[0].trader_id;
+  const winnerValue = ranked[0].total_portfolio_value;
+  // Only crown a sole winner — ties leave everyone unmarked rather than picking
+  // one arbitrarily.
+  const tied = snap.traders.filter((t) => t.total_portfolio_value === winnerValue).length > 1;
+  for (const t of snap.traders) {
+    const panel = panels.get(t.trader_id);
+    if (!panel) continue;
+    if (tied) panel.setEndState(null);
+    else panel.setEndState(t.trader_id === winnerId ? "winner" : "loser");
+  }
 }
 
 function startTickLoop(): void {
