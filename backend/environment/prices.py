@@ -1,18 +1,36 @@
-"""Massive (formerly Polygon.io) price lookups.
+"""Massive (formerly Polygon.io) price lookups with Kraken fallback for crypto.
 
-Thin wrapper over the official `massive` Python REST client. Reads
-MASSIVE_API_KEY from the environment.
+Equities go through the Massive REST client. Crypto tickers (X:BTCUSD etc.)
+route to Kraken's free public API — no key required, works 24/7.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import urllib.request
 
 from dotenv import load_dotenv
 from massive import RESTClient
 
 load_dotenv(override=True)
+
+_KRAKEN_TICKER_URL = "https://api.kraken.com/0/public/Ticker"
+
+
+def _is_crypto(ticker: str) -> bool:
+    return ticker.upper().startswith("X:")
+
+
+def _kraken_price(ticker: str) -> float:
+    pair = ticker.upper().removeprefix("X:")
+    resp = urllib.request.urlopen(f"{_KRAKEN_TICKER_URL}?pair={pair}", timeout=10)
+    data = json.loads(resp.read())
+    if data["error"]:
+        raise RuntimeError(f"Kraken error for {pair}: {data['error']}")
+    result_key = next(iter(data["result"]))
+    return float(data["result"][result_key]["c"][0])
 
 
 class Prices:
@@ -26,7 +44,10 @@ class Prices:
 
     def get_price(self, ticker: str) -> float:
         """Return the last trade price for a ticker (synchronous)."""
-        trade = self.client.get_last_trade(ticker=ticker.upper())
+        ticker = ticker.upper()
+        if _is_crypto(ticker):
+            return _kraken_price(ticker)
+        trade = self.client.get_last_trade(ticker=ticker)
         return float(trade.price)
 
     def get_prices(self, tickers: list[str]) -> dict[str, float]:
