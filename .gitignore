@@ -220,3 +220,7 @@ frontend/src/*.js.map
 frontend/tsconfig.tsbuildinfo
 
 .DS_Store
+
+# VM scripts runtime files
+logs/
+scripts/.tradewars.pid
