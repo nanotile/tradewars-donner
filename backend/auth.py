@@ -29,7 +29,8 @@ logger = logging.getLogger(__name__)
 AUTH_SECRET_KEY = os.environ.get("AUTH_SECRET_KEY", "")
 DEV_MODE = os.environ.get("DEV_MODE", "").lower() in ("1", "true", "yes")
 ALGORITHM = "HS256"
-TOKEN_EXPIRE_DAYS = 7
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
+REFRESH_TOKEN_EXPIRE_DAYS = 7
 
 
 def check_auth_config() -> None:
@@ -102,11 +103,26 @@ def authenticate_user(username: str, password: str) -> Optional[dict]:
 def create_access_token(username: str) -> tuple[str, datetime]:
     users = load_users()
     jwt_version = users.get(username, {}).get("jwt_version", 0)
-    expires_at = datetime.now(timezone.utc) + timedelta(days=TOKEN_EXPIRE_DAYS)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     payload = {
         "sub": username,
         "exp": expires_at,
         "jv": jwt_version,
+        "type": "access",
+    }
+    token = _pyjwt.encode(payload, AUTH_SECRET_KEY, algorithm=ALGORITHM)
+    return token, expires_at
+
+
+def create_refresh_token(username: str) -> tuple[str, datetime]:
+    users = load_users()
+    jwt_version = users.get(username, {}).get("jwt_version", 0)
+    expires_at = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    payload = {
+        "sub": username,
+        "exp": expires_at,
+        "jv": jwt_version,
+        "type": "refresh",
     }
     token = _pyjwt.encode(payload, AUTH_SECRET_KEY, algorithm=ALGORITHM)
     return token, expires_at
@@ -115,6 +131,26 @@ def create_access_token(username: str) -> tuple[str, datetime]:
 def decode_token(token: str) -> Optional[str]:
     try:
         payload = _pyjwt.decode(token, AUTH_SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        if not username:
+            return None
+        if payload.get("type") == "refresh":
+            return None
+        token_version = payload.get("jv", 0)
+        users = load_users()
+        current_version = users.get(username, {}).get("jwt_version", 0)
+        if token_version < current_version:
+            return None
+        return username
+    except _pyjwt.PyJWTError:
+        return None
+
+
+def decode_refresh_token(token: str) -> Optional[str]:
+    try:
+        payload = _pyjwt.decode(token, AUTH_SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") != "refresh":
+            return None
         username = payload.get("sub")
         if not username:
             return None

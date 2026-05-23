@@ -22,8 +22,10 @@ logger = logging.getLogger(__name__)
 from backend.auth import (
     authenticate_user,
     create_access_token,
+    create_refresh_token,
     create_sse_ticket,
     decode_token,
+    decode_refresh_token,
     bump_jwt_version,
     check_lockout,
     record_login_failure,
@@ -67,12 +69,15 @@ async def login(request: Request, body: LoginRequest):
 
     logger.info("Successful login for '%s' from %s", user["username"], client_ip)
     token, expires_at = create_access_token(user["username"])
+    refresh, refresh_expires = create_refresh_token(user["username"])
     return {
         "token": token,
+        "refresh_token": refresh,
         "username": user["username"],
         "display_name": user["display_name"],
         "is_admin": user.get("is_admin", False),
         "expires_at": expires_at.isoformat(),
+        "refresh_expires_at": refresh_expires.isoformat(),
     }
 
 
@@ -132,6 +137,33 @@ async def change_password(
     save_users(users)
     bump_jwt_version(username)
     return {"ok": True, "message": "Password changed - all other sessions have been signed out"}
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str = Field(..., max_length=2000)
+
+
+@router.post("/refresh")
+async def refresh(body: RefreshRequest):
+    if _auth_mod.DEV_MODE and not _auth_mod.AUTH_SECRET_KEY:
+        return {"token": "", "refresh_token": "", "expires_at": None, "auth_disabled": True}
+
+    username = decode_refresh_token(body.refresh_token)
+    if not username:
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+
+    users = load_users()
+    if username not in users:
+        raise HTTPException(status_code=401, detail="User no longer exists")
+
+    token, expires_at = create_access_token(username)
+    new_refresh, refresh_expires = create_refresh_token(username)
+    return {
+        "token": token,
+        "refresh_token": new_refresh,
+        "expires_at": expires_at.isoformat(),
+        "refresh_expires_at": refresh_expires.isoformat(),
+    }
 
 
 @router.post("/sse-ticket")

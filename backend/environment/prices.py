@@ -12,6 +12,7 @@ import os
 import time
 import urllib.request
 
+import httpx
 from massive import RESTClient
 
 _KRAKEN_TICKER_URL = "https://api.kraken.com/0/public/Ticker"
@@ -32,6 +33,17 @@ def _kraken_price(ticker: str) -> float:
     return float(data["result"][result_key]["c"][0])
 
 
+async def _async_kraken_price(client: httpx.AsyncClient, ticker: str) -> float:
+    pair = ticker.upper().removeprefix("X:")
+    resp = await client.get(_KRAKEN_TICKER_URL, params={"pair": pair}, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    if data["error"]:
+        raise RuntimeError(f"Kraken error for {pair}: {data['error']}")
+    result_key = next(iter(data["result"]))
+    return float(data["result"][result_key]["c"][0])
+
+
 class Prices:
     """Synchronous and async helpers for looking up the last trade price."""
 
@@ -41,6 +53,12 @@ class Prices:
             raise RuntimeError("MASSIVE_API_KEY is not set")
         self.client = RESTClient(api_key=key)
         self._cache: dict[str, tuple[float, float]] = {}
+        self._http: httpx.AsyncClient | None = None
+
+    def _get_http(self) -> httpx.AsyncClient:
+        if self._http is None or self._http.is_closed:
+            self._http = httpx.AsyncClient()
+        return self._http
 
     def get_price(self, ticker: str) -> float:
         """Return the last trade price for a ticker (synchronous). Cached for 2s."""
@@ -62,11 +80,23 @@ class Prices:
         return {t: self.get_price(t) for t in tickers}
 
     async def aget_price(self, ticker: str) -> float:
-        """Async wrapper via a worker thread."""
-        return await asyncio.to_thread(self.get_price, ticker)
+        """Async lookup — native httpx for crypto, thread for Massive SDK."""
+        ticker = ticker.upper()
+        now = time.monotonic()
+        cached = self._cache.get(ticker)
+        if cached and now - cached[1] < _CACHE_TTL:
+            return cached[0]
+        if _is_crypto(ticker):
+            price = await _async_kraken_price(self._get_http(), ticker)
+        else:
+            price = await asyncio.to_thread(
+                lambda t=ticker: float(self.client.get_last_trade(ticker=t).price)
+            )
+        self._cache[ticker] = (price, now)
+        return price
 
     async def aget_prices(self, tickers: list[str]) -> dict[str, float]:
-        """Async batch lookup, parallelised across threads."""
+        """Async batch lookup — parallelised."""
         tasks = [self.aget_price(t) for t in tickers]
         results = await asyncio.gather(*tasks)
         return dict(zip(tickers, results))

@@ -4,6 +4,7 @@
 import { apiFetch, getToken } from "./apiClient";
 
 const TOKEN_KEY = "tradewars-auth-token";
+const REFRESH_KEY = "tradewars-refresh-token";
 const USER_KEY = "tradewars-auth-user";
 
 export interface AuthUser {
@@ -72,6 +73,9 @@ export async function login(
       return { ok: true };
     }
     localStorage.setItem(TOKEN_KEY, data.token);
+    if (data.refresh_token) {
+      localStorage.setItem(REFRESH_KEY, data.refresh_token);
+    }
     localStorage.setItem(
       USER_KEY,
       JSON.stringify({
@@ -100,6 +104,7 @@ export function logout(): void {
 function clearAuth(): void {
   _user = null;
   localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(REFRESH_KEY);
   localStorage.removeItem(USER_KEY);
 }
 

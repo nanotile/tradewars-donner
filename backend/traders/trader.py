@@ -16,12 +16,12 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any
 
 from agents import Agent, Runner
 
 from backend.traders.mcp_servers import make_massive_mcp, make_memory_mcp
+from backend.utils import utcnow
 from backend.traders.models import TraderConfig, build_model, build_model_settings
 from backend.traders.templates import render_cycle_input, render_system_prompt
 from backend.traders.tools import TraderContext, get_state, trade
@@ -33,10 +33,7 @@ RATIONALE_MAX_CHARS = 800
 TOOL_OUTPUT_PREVIEW_CHARS = 2000
 INTER_CYCLE_SLEEP_SECONDS = 10.0
 ERROR_BACKOFF_SECONDS = 2.0
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+MCP_MAX_RETRIES = 3
 
 
 def _format_output(out: Any) -> str:
@@ -120,7 +117,7 @@ class Trader:
             TraderEvent(
                 trader_id=self.config.id,
                 type=type_,
-                timestamp=_now(),
+                timestamp=utcnow().isoformat(),
                 payload=payload,
             )
         )
@@ -175,6 +172,34 @@ class Trader:
                 await self._emit("message", {"text": joined})
 
     async def run_until_stopped(self, stop_event: asyncio.Event) -> None:
+        for attempt in range(1, MCP_MAX_RETRIES + 1):
+            if stop_event.is_set():
+                return
+            try:
+                await self._run_with_mcps(stop_event)
+                return
+            except Exception:
+                if attempt >= MCP_MAX_RETRIES or stop_event.is_set():
+                    logger.error(
+                        "MCP subprocess failed %d/%d times for %s — giving up",
+                        attempt, MCP_MAX_RETRIES, self.config.id,
+                    )
+                    await self._emit("error", {
+                        "cycle": self.cycle_count,
+                        "error": f"MCP crashed {attempt} times — trader stopped",
+                    })
+                    return
+                logger.warning(
+                    "MCP subprocess crashed for %s (attempt %d/%d) — restarting",
+                    self.config.id, attempt, MCP_MAX_RETRIES,
+                )
+                await self._emit("error", {
+                    "cycle": self.cycle_count,
+                    "error": f"MCP crashed (attempt {attempt}/{MCP_MAX_RETRIES}) — restarting",
+                })
+                await asyncio.sleep(ERROR_BACKOFF_SECONDS)
+
+    async def _run_with_mcps(self, stop_event: asyncio.Event) -> None:
         massive = make_massive_mcp()
         memory = make_memory_mcp(self.config.id)
         async with massive, memory:

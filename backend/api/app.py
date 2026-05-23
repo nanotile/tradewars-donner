@@ -21,9 +21,12 @@ instance can be swapped across games while routes stay bound to the holder).
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
+import logging.config
 import time
+import uuid
 from dataclasses import asdict
 from pathlib import Path
 
@@ -112,11 +115,43 @@ class ArenaHolder:
 
 _logger = logging.getLogger(__name__)
 
+_request_id: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
+
+
+class _JSONFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        entry = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
+            "module": record.module,
+            "msg": record.getMessage(),
+            "rid": _request_id.get("-"),
+        }
+        if record.exc_info and record.exc_info[1]:
+            entry["exc"] = self.formatException(record.exc_info)
+        return json.dumps(entry, default=str)
+
+
+def _configure_logging() -> None:
+    logging.config.dictConfig({
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {"json": {"()": _JSONFormatter}},
+        "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "json"}},
+        "root": {"level": "INFO", "handlers": ["console"]},
+        "loggers": {
+            "uvicorn": {"handlers": ["console"], "level": "INFO", "propagate": False},
+            "uvicorn.error": {"handlers": ["console"], "level": "INFO", "propagate": False},
+            "uvicorn.access": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        },
+    })
+
 
 _APP_START_TIME = time.monotonic()
 
 
 def create_app(holder: ArenaHolder | None = None) -> FastAPI:
+    _configure_logging()
     _auth_mod.check_auth_config()
 
     app = FastAPI(title="Tradewars")
@@ -181,7 +216,14 @@ def create_app(holder: ArenaHolder | None = None) -> FastAPI:
         request.state.username = username
         return await call_next(request)
 
-    # Security headers — outermost so they apply to all responses including 401s
+    @app.middleware("http")
+    async def request_id_middleware(request: Request, call_next):
+        rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:8]
+        _request_id.set(rid)
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = rid
+        return response
+
     @app.middleware("http")
     async def security_headers_middleware(request: Request, call_next):
         response = await call_next(request)

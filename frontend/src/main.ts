@@ -540,6 +540,20 @@ function renderHistoryGames(container: HTMLElement, games: GameHistoryEntry[]): 
   }
 }
 
+// ---- Mobile sidebar toggle ----
+
+const mobileMenuBtn = document.getElementById("mobile-menu") as HTMLButtonElement;
+const sidebar = document.getElementById("sidebar") as HTMLElement;
+const sidebarBackdrop = document.getElementById("sidebar-backdrop") as HTMLElement;
+
+function toggleSidebar(): void {
+  const open = sidebar.classList.toggle("sidebar-open");
+  sidebarBackdrop.classList.toggle("active", open);
+}
+
+mobileMenuBtn.addEventListener("click", toggleSidebar);
+sidebarBackdrop.addEventListener("click", toggleSidebar);
+
 // ---- Launch ----
 
 boot();

@@ -24,17 +24,13 @@ from backend.traders.mcp_servers import wipe_memory_files
 from backend.traders.models import TraderConfig
 from backend.traders.tools import TraderContext, holding_detail
 from backend.traders.trader import Trader, TraderEvent
+from backend.utils import REPO_ROOT, utcnow
 
 logger = logging.getLogger(__name__)
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = REPO_ROOT / "backend" / "arena" / "config.json"
 
 SHUTDOWN_TIMEOUT_SECONDS = 30.0
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 @dataclass
@@ -175,7 +171,7 @@ class Arena:
         for tid in trader_ids:
             self.accounts.create_trader(tid)
 
-        self._started_at = _now()
+        self._started_at = utcnow()
         self.stop_event.clear()
 
         for cfg in self.config.traders:
@@ -234,7 +230,7 @@ class Arena:
 
             await self._liquidate_all()
 
-            self._ended_at = _now()
+            self._ended_at = utcnow()
             snapshot = await self._snapshot(running=False)
             self._record_game(snapshot)
             self._final_snapshot = snapshot
@@ -283,7 +279,7 @@ class Arena:
             ))
 
         assert self._started_at is not None
-        elapsed = (_now() - self._started_at).total_seconds()
+        elapsed = (utcnow() - self._started_at).total_seconds()
         return ArenaSnapshot(
             started_at=self._started_at.isoformat(),
             time_elapsed_seconds=round(elapsed, 1),
@@ -320,7 +316,7 @@ class Arena:
                     await self.events.put(TraderEvent(
                         trader_id=cfg.id,
                         type="liquidation",
-                        timestamp=_now().isoformat(),
+                        timestamp=utcnow().isoformat(),
                         payload={"ticker": ticker, "quantity": pos["quantity"], "price": price},
                     ))
                 except Exception:

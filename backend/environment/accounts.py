@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
 from pathlib import Path
+
+from backend.utils import utcnow
 
 INITIAL_BALANCE = 1_000_000.0
 EPSILON = 1e-9  # float quantity tolerance after SQLite round-trips
@@ -49,10 +50,6 @@ CREATE TABLE IF NOT EXISTS games (
 
 CREATE INDEX IF NOT EXISTS idx_trades_trader ON trades(trader_id);
 """
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 class Accounts:
@@ -190,7 +187,7 @@ class Accounts:
                 )
             self.conn.execute(
                 "INSERT INTO trades (trader_id, ticker, quantity, price, ts) VALUES (?, ?, ?, ?, ?)",
-                (trader_id, ticker, quantity, price, _now()),
+                (trader_id, ticker, quantity, price, utcnow().isoformat()),
             )
 
     def portfolio_value(

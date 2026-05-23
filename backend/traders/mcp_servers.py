@@ -11,11 +11,11 @@ Memory files are wiped by the arena at game start.
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from agents.mcp import MCPServerStdio
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from backend.utils import REPO_ROOT
+
 MEMORY_DIR = REPO_ROOT / "backend" / "environment" / "memory"
 
 # First start of Massive MCP indexes the OpenAPI spec from llms-full.txt;
@@ -69,7 +69,7 @@ def make_memory_mcp(trader_id: str) -> MCPServerStdio:
         name=f"Memory[{trader_id}]",
         params={
             "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-memory"],
+            "args": ["-y", "@modelcontextprotocol/server-memory@2026.1.26"],
             "env": env,
         },
         cache_tools_list=True,
