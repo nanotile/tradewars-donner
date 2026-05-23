@@ -182,9 +182,8 @@ class Accounts:
         """Cash + sum(quantity * current_price). `prices` must cover every held ticker."""
         value = self.cash(trader_id)
         for ticker, pos in self.holdings(trader_id).items():
-            if ticker not in prices:
-                raise KeyError(f"No price for held ticker: {ticker}")
-            value += pos["quantity"] * prices[ticker]
+            if ticker in prices:
+                value += pos["quantity"] * prices[ticker]
         return value
 
     def pnl(self, trader_id: str, portfolio_value: float) -> float:

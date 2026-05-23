@@ -257,16 +257,17 @@ class Arena:
         tickers = self._all_held_tickers()
         current = await self.prices.aget_prices(sorted(tickers)) if tickers else {}
         self._last_prices.update(current)
+        all_prices = {**self._last_prices, **current}
 
         traders_snap = []
         for cfg in self.config.traders:
             holdings = self.accounts.holdings(cfg.id)
             detail = {}
             for t, p in holdings.items():
-                price = current.get(t) or self._last_prices.get(t)
+                price = all_prices.get(t)
                 if price is not None:
                     detail[t] = holding_detail(p, price)
-            value = self.accounts.portfolio_value(cfg.id, current)
+            value = self.accounts.portfolio_value(cfg.id, all_prices)
             traders_snap.append(TraderSnapshot(
                 trader_id=cfg.id,
                 display_name=cfg.display_name,
