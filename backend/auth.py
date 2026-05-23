@@ -70,9 +70,12 @@ def load_users() -> dict:
 def save_users(users: dict):
     global _users_cache, _users_mtime
     USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(USERS_FILE, "w") as f:
+    tmp = USERS_FILE.with_suffix(".tmp")
+    with open(tmp, "w") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         json.dump(users, f, indent=2)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, USERS_FILE)
     _users_cache = users
     _users_mtime = os.path.getmtime(USERS_FILE)
 
@@ -240,25 +243,28 @@ _LOCKOUT_WINDOW = timedelta(minutes=10)
 _LOCKOUT_DURATION = timedelta(minutes=15)
 _login_failures: dict[str, list[datetime]] = {}  # username → [timestamps]
 _lockout_until: dict[str, datetime] = {}  # username → locked_until
+_lockout_lock = threading.Lock()
 
 
 def check_lockout(username: str) -> None:
     now = datetime.now(timezone.utc)
-    until = _lockout_until.get(username)
-    if until and now < until:
-        raise HTTPException(status_code=429, detail="Account temporarily locked")
-    if until and now >= until:
-        del _lockout_until[username]
-        _login_failures.pop(username, None)
+    with _lockout_lock:
+        until = _lockout_until.get(username)
+        if until and now < until:
+            raise HTTPException(status_code=429, detail="Account temporarily locked")
+        if until and now >= until:
+            del _lockout_until[username]
+            _login_failures.pop(username, None)
 
 
 def record_login_failure(username: str) -> None:
     now = datetime.now(timezone.utc)
     cutoff = now - _LOCKOUT_WINDOW
-    attempts = _login_failures.get(username, [])
-    attempts = [t for t in attempts if t > cutoff]
-    attempts.append(now)
-    _login_failures[username] = attempts
-    if len(attempts) >= _LOCKOUT_FAILURES:
-        _lockout_until[username] = now + _LOCKOUT_DURATION
-        logger.warning("Account '%s' locked out after %d failed attempts", username, len(attempts))
+    with _lockout_lock:
+        attempts = _login_failures.get(username, [])
+        attempts = [t for t in attempts if t > cutoff]
+        attempts.append(now)
+        _login_failures[username] = attempts
+        if len(attempts) >= _LOCKOUT_FAILURES:
+            _lockout_until[username] = now + _LOCKOUT_DURATION
+            logger.warning("Account '%s' locked out after %d failed attempts", username, len(attempts))

@@ -17,7 +17,7 @@ import sys
 from backend.auth import USERS_FILE, load_users, save_users, hash_password
 
 
-def cmd_add(username: str, display_name: str):
+def cmd_add(username: str, display_name: str, *, is_admin: bool = False):
     users = load_users()
     if username in users:
         print(f"User '{username}' already exists. Use 'remove' first to reset.")
@@ -35,9 +35,11 @@ def cmd_add(username: str, display_name: str):
     users[username] = {
         "display_name": display_name,
         "password_hash": hash_password(password),
+        "is_admin": is_admin,
     }
     save_users(users)
-    print(f"Added user '{username}' ({display_name})")
+    role = " [ADMIN]" if is_admin else ""
+    print(f"Added user '{username}' ({display_name}){role}")
     print(f"Users file: {USERS_FILE}")
 
 
@@ -75,9 +77,10 @@ def main():
 
     if command == "add":
         if len(sys.argv) < 4:
-            print('Usage: uv run python manage_users.py add <email> "<display_name>"')
+            print('Usage: uv run python manage_users.py add <email> "<display_name>" [--admin]')
             sys.exit(1)
-        cmd_add(sys.argv[2], sys.argv[3])
+        admin_flag = "--admin" in sys.argv[4:]
+        cmd_add(sys.argv[2], sys.argv[3], is_admin=admin_flag)
     elif command == "remove":
         if len(sys.argv) < 3:
             print("Usage: uv run python manage_users.py remove <email>")

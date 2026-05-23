@@ -25,6 +25,7 @@ class CreateUserRequest(BaseModel):
     username: str = Field(..., max_length=100, pattern=r"^[a-zA-Z0-9_.@+\-]+$")
     display_name: str = Field(..., max_length=100)
     password: str = Field(..., min_length=6, max_length=200)
+    is_admin: bool = Field(default=False)
 
 
 @router.get("/users")
@@ -53,13 +54,13 @@ async def create_user(request: Request, body: CreateUserRequest):
     users[username] = {
         "display_name": body.display_name,
         "password_hash": hash_password(body.password),
-        "is_admin": False,
+        "is_admin": body.is_admin,
     }
     save_users(users)
     return {
         "username": username,
         "display_name": body.display_name,
-        "is_admin": False,
+        "is_admin": body.is_admin,
     }
 
 

@@ -2,6 +2,7 @@
 // and auth-expired events from apiClient.
 
 import { apiFetch, getToken } from "./apiClient";
+import { showToast } from "./toast";
 
 const TOKEN_KEY = "tradewars-auth-token";
 const REFRESH_KEY = "tradewars-refresh-token";
@@ -110,5 +111,6 @@ function clearAuth(): void {
 
 window.addEventListener("auth-expired", () => {
   _user = null;
+  showToast("Session expired — please log in again", "error");
   _onAuthChange?.(null);
 });

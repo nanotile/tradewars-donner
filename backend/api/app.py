@@ -256,13 +256,13 @@ def create_app(holder: ArenaHolder | None = None) -> FastAPI:
 
     @app.post("/arena/start")
     async def start(request: Request, body: StartRequest | None = None) -> dict:
+        username = _auth_mod.verify_admin(request)
         if holder.arena is not None and holder.arena._final_snapshot is None:
             await holder.arena.end()
         body = body or StartRequest()
         selections = (
             [s.model_dump() for s in body.selections] if body.selections is not None else None
         )
-        username = getattr(request.state, "username", None)
         try:
             arena = holder.new_arena(
                 duration_override=body.duration_seconds,
@@ -278,7 +278,8 @@ def create_app(holder: ArenaHolder | None = None) -> FastAPI:
         return asdict(snap)
 
     @app.post("/arena/stop")
-    async def stop() -> dict:
+    async def stop(request: Request) -> dict:
+        _auth_mod.verify_admin(request)
         arena = holder.require()
         snap = await arena.end()
         return asdict(snap)
