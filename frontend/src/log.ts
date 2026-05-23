@@ -17,6 +17,7 @@ const TYPE_LABELS: Record<TraderEvent["type"], string> = {
 
 export class LogView {
   private host: HTMLElement;
+  private rendered = 0;
 
   constructor(host: HTMLElement) {
     this.host = host;
@@ -24,8 +25,12 @@ export class LogView {
   }
 
   render(events: TraderEvent[]): void {
-    this.host.innerHTML = "";
-    for (const ev of events) {
+    if (events.length < this.rendered) {
+      this.host.innerHTML = "";
+      this.rendered = 0;
+    }
+    for (let i = this.rendered; i < events.length; i++) {
+      const ev = events[i];
       const row = document.createElement("div");
       row.className = `log-row log-${ev.type}`;
       row.innerHTML = `
@@ -35,6 +40,7 @@ export class LogView {
       row.querySelector(".log-text")!.textContent = summarise(ev);
       this.host.append(row);
     }
+    this.rendered = events.length;
     this.host.scrollTop = this.host.scrollHeight;
   }
 }

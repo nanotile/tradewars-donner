@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS games (
     final_results TEXT NOT NULL,
     initiated_by TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_trades_trader ON trades(trader_id);
 """
 
 
@@ -62,6 +64,7 @@ class Accounts:
         # a worker thread under TestClient; we never write concurrently, so this
         # is safe.
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
         self._migrate()

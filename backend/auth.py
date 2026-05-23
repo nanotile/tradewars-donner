@@ -43,23 +43,37 @@ def check_auth_config() -> None:
 
 USERS_FILE = Path(__file__).resolve().parent / "data" / "users.json"
 
+_users_cache: dict | None = None
+_users_mtime: float = 0.0
+
 
 def _load_users() -> dict:
+    global _users_cache, _users_mtime
     if not USERS_FILE.exists():
+        _users_cache = {}
+        _users_mtime = 0.0
         return {}
     try:
+        mtime = os.path.getmtime(USERS_FILE)
+        if _users_cache is not None and mtime == _users_mtime:
+            return _users_cache
         with open(USERS_FILE) as f:
-            return json.load(f)
+            _users_cache = json.load(f)
+        _users_mtime = mtime
+        return _users_cache
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to read users.json: %s", e)
         return {}
 
 
 def _save_users(users: dict):
+    global _users_cache, _users_mtime
     USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(USERS_FILE, "w") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         json.dump(users, f, indent=2)
+    _users_cache = users
+    _users_mtime = os.path.getmtime(USERS_FILE)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

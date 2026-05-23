@@ -154,7 +154,7 @@ class Arena:
     accounts: Accounts
     prices: Prices
     initiated_by: str | None = None
-    events: asyncio.Queue[TraderEvent] = field(default_factory=asyncio.Queue)
+    events: asyncio.Queue[TraderEvent | None] = field(default_factory=asyncio.Queue)
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
     _started_at: datetime | None = None
     _ended_at: datetime | None = None
@@ -238,6 +238,7 @@ class Arena:
             snapshot = await self._snapshot(running=False)
             self._record_game(snapshot)
             self._final_snapshot = snapshot
+            await self.events.put(None)  # sentinel — terminates stream()
             return snapshot
 
     # ---- tick / snapshot ----
@@ -340,6 +341,9 @@ class Arena:
     # ---- streaming ----
 
     async def stream(self) -> AsyncIterator[TraderEvent]:
-        """Yield TraderEvents as they arrive. Intended for the SSE endpoint."""
+        """Yield TraderEvents as they arrive. Terminates after game ends."""
         while True:
-            yield await self.events.get()
+            event = await self.events.get()
+            if event is None:
+                return
+            yield event
