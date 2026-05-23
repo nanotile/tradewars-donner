@@ -39,7 +39,7 @@ const sidebarAuth = document.getElementById("sidebar-auth")!;
 // App state
 const panels = new Map<string, TraderPanel>();
 const states = new Map<string, TraderState>();
-let stream: EventSource | null = null;
+let stream: { close: () => void } | null = null;
 let tickTimer: number | null = null;
 let durationSeconds = DEFAULT_DURATION_MINUTES * 60;
 let catalog: ArenaConfigCatalog | null = null;

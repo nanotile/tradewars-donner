@@ -110,15 +110,7 @@ _logger = logging.getLogger(__name__)
 
 
 def create_app(holder: ArenaHolder | None = None) -> FastAPI:
-    if not _auth_mod.AUTH_SECRET_KEY:
-        _logger.warning(
-            "\n"
-            "╔══════════════════════════════════════════════════════════╗\n"
-            "║  AUTH_SECRET_KEY is empty — authentication is DISABLED  ║\n"
-            "║  All routes are publicly accessible (dev mode).        ║\n"
-            "║  Set AUTH_SECRET_KEY in .env for production.            ║\n"
-            "╚══════════════════════════════════════════════════════════╝"
-        )
+    _auth_mod.check_auth_config()
 
     app = FastAPI(title="Tradewars")
     holder = holder or ArenaHolder()
@@ -150,7 +142,7 @@ def create_app(holder: ArenaHolder | None = None) -> FastAPI:
     # JWT middleware — protects /arena/* routes
     @app.middleware("http")
     async def auth_middleware(request: Request, call_next):
-        if not _auth_mod.AUTH_SECRET_KEY:
+        if _auth_mod.DEV_MODE and not _auth_mod.AUTH_SECRET_KEY:
             return await call_next(request)
         path = request.url.path
         if not path.startswith("/arena/"):
@@ -222,6 +214,7 @@ def create_app(holder: ArenaHolder | None = None) -> FastAPI:
                 yield {
                     "event": event.type,
                     "data": json.dumps(asdict(event)),
+                    "retry": 2000,
                 }
 
         return EventSourceResponse(gen())

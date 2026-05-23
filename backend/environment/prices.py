@@ -9,11 +9,13 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 import urllib.request
 
 from massive import RESTClient
 
 _KRAKEN_TICKER_URL = "https://api.kraken.com/0/public/Ticker"
+_CACHE_TTL = 2.0
 
 
 def _is_crypto(ticker: str) -> bool:
@@ -38,14 +40,22 @@ class Prices:
         if not key:
             raise RuntimeError("MASSIVE_API_KEY is not set")
         self.client = RESTClient(api_key=key)
+        self._cache: dict[str, tuple[float, float]] = {}
 
     def get_price(self, ticker: str) -> float:
-        """Return the last trade price for a ticker (synchronous)."""
+        """Return the last trade price for a ticker (synchronous). Cached for 2s."""
         ticker = ticker.upper()
+        now = time.monotonic()
+        cached = self._cache.get(ticker)
+        if cached and now - cached[1] < _CACHE_TTL:
+            return cached[0]
         if _is_crypto(ticker):
-            return _kraken_price(ticker)
-        trade = self.client.get_last_trade(ticker=ticker)
-        return float(trade.price)
+            price = _kraken_price(ticker)
+        else:
+            trade = self.client.get_last_trade(ticker=ticker)
+            price = float(trade.price)
+        self._cache[ticker] = (price, now)
+        return price
 
     def get_prices(self, tickers: list[str]) -> dict[str, float]:
         """Return {ticker: price} for a list. Sequential, simple."""

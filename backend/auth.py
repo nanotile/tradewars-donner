@@ -1,43 +1,42 @@
 """
 Module: JWT Authentication
-Version: 1.0.0
-Development Iteration: v1
+Version: 2.0.0
+Development Iteration: v2
 Developer: Kent Benson
 
 UV Environment: uv run uvicorn --factory backend.api.app:create_app --port 8000
 
-Simple JWT auth with bcrypt passwords. Users stored in backend/data/users.json.
-When AUTH_SECRET_KEY env var is unset, auth is completely disabled (dev mode).
+JWT auth with bcrypt passwords. Users stored in backend/data/users.json.
+Requires AUTH_SECRET_KEY env var unless DEV_MODE=true.
 """
 
 import json
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+import bcrypt as _bcrypt
+import jwt as _pyjwt
 from fastapi import HTTPException, Request
-
-try:
-    from jose import JWTError, jwt
-except ImportError:
-    jwt = None
-    JWTError = Exception
-
-try:
-    import bcrypt as _bcrypt
-    _BCRYPT_AVAILABLE = True
-except ImportError:
-    _bcrypt = None
-    _BCRYPT_AVAILABLE = False
-
-import logging
 
 logger = logging.getLogger(__name__)
 
 AUTH_SECRET_KEY = os.environ.get("AUTH_SECRET_KEY", "")
+DEV_MODE = os.environ.get("DEV_MODE", "").lower() in ("1", "true", "yes")
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_DAYS = 7
+
+
+def check_auth_config() -> None:
+    """Raise at startup if auth is misconfigured. Called from create_app()."""
+    if not AUTH_SECRET_KEY and not DEV_MODE:
+        raise RuntimeError(
+            "AUTH_SECRET_KEY is not set. Set it in .env or pass DEV_MODE=true to disable auth."
+        )
+    if DEV_MODE and not AUTH_SECRET_KEY:
+        logger.warning("AUTH DISABLED — DEV_MODE is set with no AUTH_SECRET_KEY")
 
 USERS_FILE = Path(__file__).resolve().parent / "data" / "users.json"
 
@@ -60,14 +59,10 @@ def _save_users(users: dict):
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    if not _BCRYPT_AVAILABLE:
-        return False
     return _bcrypt.checkpw(plain_password.encode(), hashed_password.encode())
 
 
 def hash_password(password: str) -> str:
-    if not _BCRYPT_AVAILABLE:
-        raise RuntimeError("bcrypt not installed")
     return _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
 
 
@@ -87,8 +82,6 @@ def authenticate_user(username: str, password: str) -> Optional[dict]:
 
 
 def create_access_token(username: str) -> tuple[str, datetime]:
-    if not jwt:
-        raise RuntimeError("python-jose not installed")
     users = _load_users()
     jwt_version = users.get(username, {}).get("jwt_version", 0)
     expires_at = datetime.now(timezone.utc) + timedelta(days=TOKEN_EXPIRE_DAYS)
@@ -97,15 +90,13 @@ def create_access_token(username: str) -> tuple[str, datetime]:
         "exp": expires_at,
         "jv": jwt_version,
     }
-    token = jwt.encode(payload, AUTH_SECRET_KEY, algorithm=ALGORITHM)
+    token = _pyjwt.encode(payload, AUTH_SECRET_KEY, algorithm=ALGORITHM)
     return token, expires_at
 
 
 def decode_token(token: str) -> Optional[str]:
-    if not jwt:
-        return None
     try:
-        payload = jwt.decode(token, AUTH_SECRET_KEY, algorithms=[ALGORITHM])
+        payload = _pyjwt.decode(token, AUTH_SECRET_KEY, algorithms=[ALGORITHM])
         username = payload.get("sub")
         if not username:
             return None
@@ -115,7 +106,7 @@ def decode_token(token: str) -> Optional[str]:
         if token_version < current_version:
             return None
         return username
-    except JWTError:
+    except _pyjwt.PyJWTError:
         return None
 
 
@@ -128,7 +119,7 @@ def bump_jwt_version(username: str):
 
 
 def verify_auth(request: Request):
-    if not AUTH_SECRET_KEY:
+    if DEV_MODE and not AUTH_SECRET_KEY:
         return "dev"
 
     auth_header = request.headers.get("Authorization", "")
@@ -149,7 +140,7 @@ def verify_auth(request: Request):
 
 def verify_admin(request: Request) -> str:
     username = verify_auth(request)
-    if not AUTH_SECRET_KEY:
+    if DEV_MODE and not AUTH_SECRET_KEY:
         return username
 
     users = _load_users()

@@ -35,6 +35,7 @@ class _FakePrices:
 def disable_auth(monkeypatch):
     import backend.auth
     monkeypatch.setattr(backend.auth, "AUTH_SECRET_KEY", "")
+    monkeypatch.setattr(backend.auth, "DEV_MODE", True)
 
 
 @pytest.fixture(autouse=True)
@@ -153,9 +154,9 @@ def test_start_with_unknown_reasoning_label_400(client):
     assert r.status_code == 400
 
 
-def test_start_twice_returns_409(client):
+def test_start_twice_auto_restarts(client):
     assert client.post("/arena/start").status_code == 200
-    assert client.post("/arena/start").status_code == 409
+    assert client.post("/arena/start").status_code == 200
 
 
 def test_start_with_duration_override(client, holder):

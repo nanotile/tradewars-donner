@@ -14,8 +14,8 @@ from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
+import backend.auth as _auth_mod
 from backend.auth import (
-    AUTH_SECRET_KEY,
     authenticate_user,
     create_access_token,
     decode_token,
@@ -40,7 +40,7 @@ class LoginRequest(BaseModel):
 @router.post("/login")
 @limiter.limit("5/minute")
 async def login(request: Request, body: LoginRequest):
-    if not AUTH_SECRET_KEY:
+    if _auth_mod.DEV_MODE and not _auth_mod.AUTH_SECRET_KEY:
         return {
             "token": "",
             "username": "dev",
@@ -65,7 +65,7 @@ async def login(request: Request, body: LoginRequest):
 
 @router.get("/me")
 async def me(request: Request):
-    if not AUTH_SECRET_KEY:
+    if _auth_mod.DEV_MODE and not _auth_mod.AUTH_SECRET_KEY:
         return {
             "username": "dev",
             "display_name": "Dev Mode",
@@ -104,7 +104,7 @@ async def change_password(
     body: ChangePasswordRequest,
     username: str = Depends(verify_auth),
 ):
-    if not AUTH_SECRET_KEY:
+    if _auth_mod.DEV_MODE and not _auth_mod.AUTH_SECRET_KEY:
         return {"ok": True, "message": "Auth disabled in dev mode"}
 
     users = _load_users()

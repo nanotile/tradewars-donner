@@ -18,6 +18,7 @@ export interface TraderSnapshot {
   holdings: Record<string, HoldingDetail>;
   total_portfolio_value: number;
   total_pnl: number;
+  total_trades: number;
 }
 
 export interface ArenaSnapshot {
@@ -102,22 +103,18 @@ export async function fetchArenaConfig(): Promise<ArenaConfigCatalog> {
   return r.json();
 }
 
+const SSE_RECONNECT_BASE_MS = 1000;
+const SSE_RECONNECT_MAX_MS = 30000;
+
 export function openStream(
   onEvent: (event: TraderEvent) => void,
   onError?: (err: Event) => void,
-): EventSource {
-  const token = getToken();
-  const url = token
-    ? `/arena/stream?token=${encodeURIComponent(token)}`
-    : "/arena/stream";
-  const es = new EventSource(url);
-  const dispatch = (e: MessageEvent) => {
-    try {
-      onEvent(JSON.parse(e.data));
-    } catch {
-      /* ignore malformed frames */
-    }
-  };
+): { close: () => void } {
+  let es: EventSource | null = null;
+  let attempt = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let closed = false;
+
   const types: TraderEvent["type"][] = [
     "cycle_start",
     "cycle_end",
@@ -127,7 +124,49 @@ export function openStream(
     "error",
     "liquidation",
   ];
-  for (const t of types) es.addEventListener(t, dispatch as EventListener);
-  if (onError) es.onerror = onError;
-  return es;
+
+  function dispatch(e: MessageEvent) {
+    try {
+      onEvent(JSON.parse(e.data));
+    } catch {
+      /* ignore malformed frames */
+    }
+  }
+
+  function connect() {
+    if (closed) return;
+    const token = getToken();
+    const url = token
+      ? `/arena/stream?token=${encodeURIComponent(token)}`
+      : "/arena/stream";
+    es = new EventSource(url);
+
+    es.onopen = () => {
+      attempt = 0;
+    };
+
+    for (const t of types) es.addEventListener(t, dispatch as EventListener);
+
+    es.onerror = (err) => {
+      if (onError) onError(err);
+      if (closed) return;
+      es?.close();
+      const delay = Math.min(
+        SSE_RECONNECT_BASE_MS * 2 ** attempt,
+        SSE_RECONNECT_MAX_MS,
+      );
+      attempt++;
+      reconnectTimer = setTimeout(connect, delay);
+    };
+  }
+
+  connect();
+
+  return {
+    close() {
+      closed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      es?.close();
+    },
+  };
 }

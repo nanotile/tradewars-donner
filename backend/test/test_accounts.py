@@ -134,7 +134,7 @@ def test_portfolio_value(accounts):
 def test_portfolio_value_missing_price_raises(accounts):
     accounts.create_trader("claude")
     accounts.execute_trade("claude", "AAPL", 1, 100.0)
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="AAPL"):
         accounts.portfolio_value("claude", {})
 
 

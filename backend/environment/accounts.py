@@ -116,6 +116,13 @@ class Accounts:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def trade_count(self, trader_id: str) -> int:
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS cnt FROM trades WHERE trader_id = ?",
+            (trader_id,),
+        ).fetchone()
+        return int(row["cnt"])
+
     def execute_trade(
         self, trader_id: str, ticker: str, quantity: float, price: float
     ) -> None:
@@ -182,8 +189,7 @@ class Accounts:
         """Cash + sum(quantity * current_price). `prices` must cover every held ticker."""
         value = self.cash(trader_id)
         for ticker, pos in self.holdings(trader_id).items():
-            if ticker in prices:
-                value += pos["quantity"] * prices[ticker]
+            value += pos["quantity"] * prices[ticker]
         return value
 
     def pnl(self, trader_id: str, portfolio_value: float) -> float:
