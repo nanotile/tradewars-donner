@@ -11,10 +11,7 @@ import json
 import os
 import urllib.request
 
-from dotenv import load_dotenv
 from massive import RESTClient
-
-load_dotenv(override=True)
 
 _KRAKEN_TICKER_URL = "https://api.kraken.com/0/public/Ticker"
 

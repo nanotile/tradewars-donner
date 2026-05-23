@@ -345,6 +345,15 @@ body {
 .panel-value[data-trend="up"] { color: var(--trend-up); }
 .panel-value[data-trend="down"] { color: var(--trend-down); }
 
+.panel-cycle-stats {
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: var(--trend-down);
+  min-height: 16px;
+}
+
 .panel-chart {
   min-height: 120px;
   min-width: 0;

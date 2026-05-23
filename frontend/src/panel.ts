@@ -15,6 +15,7 @@ export class TraderPanel {
   private heatmap: Heatmap;
   private log: LogView;
   private valueEl: HTMLElement;
+  private statsEl: HTMLElement;
 
   constructor(state: TraderState, durationSeconds: number) {
     this.state = state;
@@ -25,6 +26,7 @@ export class TraderPanel {
       <header class="panel-head">
         <span class="panel-name">${state.displayName}</span>
         <span class="panel-value" data-trend="flat">$0</span>
+        <span class="panel-cycle-stats"></span>
         <span class="panel-winner-pill">Winner</span>
       </header>
       <div class="panel-chart"></div>
@@ -32,6 +34,7 @@ export class TraderPanel {
       <div class="panel-log"></div>
     `;
     this.valueEl = this.root.querySelector(".panel-value")!;
+    this.statsEl = this.root.querySelector(".panel-cycle-stats")!;
     this.heatmap = new Heatmap(this.root.querySelector(".panel-heatmap")!);
     this.log = new LogView(this.root.querySelector(".panel-log")!);
     // Chart created in mount() — uPlot misbehaves when its host isn't in the
@@ -66,6 +69,11 @@ export class TraderPanel {
       this.heatmap.render(snap.holdings, this.state.priceDirections());
       this.state.rememberPrices();
     }
+    const { cyclesPerMinute, avgDurationSeconds } = this.state.cycleStats;
+    this.statsEl.textContent = formatCycleStats(
+      cyclesPerMinute,
+      avgDurationSeconds,
+    );
     if (this.chart) this.chart.update(this.state.chart, STARTING_CASH);
     this.log.render(this.state.log);
   }
@@ -77,4 +85,15 @@ function formatMoney(n: number): string {
     currency: "USD",
     maximumFractionDigits: 0,
   });
+}
+
+function formatCycleStats(
+  rpm: number | null,
+  avgSec: number | null,
+): string {
+  if (rpm === null && avgSec === null) return "";
+  const parts: string[] = [];
+  if (rpm !== null) parts.push(`${rpm.toFixed(1)} req/min`);
+  if (avgSec !== null) parts.push(`${avgSec.toFixed(0)}s avg`);
+  return parts.join(" · ");
 }

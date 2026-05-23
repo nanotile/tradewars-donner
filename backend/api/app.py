@@ -20,8 +20,13 @@ instance can be swapped across games while routes stay bound to the holder).
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -101,7 +106,20 @@ class ArenaHolder:
         return self.arena
 
 
+_logger = logging.getLogger(__name__)
+
+
 def create_app(holder: ArenaHolder | None = None) -> FastAPI:
+    if not _auth_mod.AUTH_SECRET_KEY:
+        _logger.warning(
+            "\n"
+            "╔══════════════════════════════════════════════════════════╗\n"
+            "║  AUTH_SECRET_KEY is empty — authentication is DISABLED  ║\n"
+            "║  All routes are publicly accessible (dev mode).        ║\n"
+            "║  Set AUTH_SECRET_KEY in .env for production.            ║\n"
+            "╚══════════════════════════════════════════════════════════╝"
+        )
+
     app = FastAPI(title="Tradewars")
     holder = holder or ArenaHolder()
     app.state.arena_holder = holder
