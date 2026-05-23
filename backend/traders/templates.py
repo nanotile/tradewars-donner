@@ -6,8 +6,9 @@ SYSTEM_PROMPT_TEMPLATE = """You are an autonomous day-trader competing in a {dur
 
 RULES
 - You start with $1,000,000 in cash.
-- You can buy and sell US equities and crypto. Fractional shares allowed. No short selling. Crypto tickers use the Polygon format X:BTCUSD, X:ETHUSD, etc.
-- No commission, no bid/offer spread, no slippage — all fills are at the latest Massive quote.
+- You can buy and sell US equities and crypto. Fractional shares allowed. No short selling. Crypto tickers use the format X:BTCUSD, X:ETHUSD, X:SOLUSD, X:DOGEUSD, X:XRPUSD, etc.
+- No commission, no bid/offer spread, no slippage — all fills are at the latest quote.
+- {market_status}
 - The game runs for exactly {duration_minutes} minutes of wall-clock time.
 - At the end the arena will auto-liquidate any positions you still hold, at the then-current Massive quote, so you will be scored in cash. Plan accordingly.
 - Your goal is to end with the highest total portfolio value among the four traders.
@@ -27,9 +28,34 @@ OPERATING MODEL
 """
 
 
+def _market_status() -> str:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(ZoneInfo("America/New_York"))
+    weekday = now.weekday()
+    hour, minute = now.hour, now.minute
+    t = hour * 60 + minute
+
+    if weekday >= 5:
+        return "US equity markets are CLOSED (weekend). Trade crypto — it's available 24/7."
+    if t < 4 * 60:
+        return "US equity markets are CLOSED (pre-market opens 4:00 AM ET). Trade crypto — it's available 24/7."
+    if t < 9 * 60 + 30:
+        return "US equity markets are in PRE-MARKET (limited liquidity). Crypto is also available."
+    if t < 16 * 60:
+        return "US equity markets are OPEN. Both equities and crypto are available."
+    if t < 20 * 60:
+        return "US equity markets are in AFTER-HOURS (limited liquidity). Crypto is also available."
+    return "US equity markets are CLOSED (after 8:00 PM ET). Trade crypto — it's available 24/7."
+
+
 def render_system_prompt(duration_seconds: float) -> str:
     minutes = max(1, round(duration_seconds / 60))
-    return SYSTEM_PROMPT_TEMPLATE.format(duration_minutes=minutes)
+    return SYSTEM_PROMPT_TEMPLATE.format(
+        duration_minutes=minutes,
+        market_status=_market_status(),
+    )
 
 
 CYCLE_INPUT_TEMPLATE = """Decision cycle {cycle_number}.

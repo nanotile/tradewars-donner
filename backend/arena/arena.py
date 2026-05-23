@@ -261,7 +261,11 @@ class Arena:
         traders_snap = []
         for cfg in self.config.traders:
             holdings = self.accounts.holdings(cfg.id)
-            detail = {t: holding_detail(p, current[t]) for t, p in holdings.items()}
+            detail = {}
+            for t, p in holdings.items():
+                price = current.get(t) or self._last_prices.get(t)
+                if price is not None:
+                    detail[t] = holding_detail(p, price)
             value = self.accounts.portfolio_value(cfg.id, current)
             traders_snap.append(TraderSnapshot(
                 trader_id=cfg.id,
