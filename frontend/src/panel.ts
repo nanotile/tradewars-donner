@@ -70,9 +70,11 @@ export class TraderPanel {
       this.state.rememberPrices();
     }
     const { cyclesPerMinute, avgDurationSeconds } = this.state.cycleStats;
+    const trades = snap ? snap.total_trades : 0;
     this.statsEl.textContent = formatCycleStats(
       cyclesPerMinute,
       avgDurationSeconds,
+      trades,
     );
     if (this.chart) this.chart.update(this.state.chart, STARTING_CASH);
     this.log.render(this.state.log);
@@ -90,10 +92,12 @@ function formatMoney(n: number): string {
 function formatCycleStats(
   rpm: number | null,
   avgSec: number | null,
+  trades: number,
 ): string {
-  if (rpm === null && avgSec === null) return "";
+  if (rpm === null && avgSec === null && trades === 0) return "";
   const parts: string[] = [];
   if (rpm !== null) parts.push(`${rpm.toFixed(1)} req/min`);
   if (avgSec !== null) parts.push(`${avgSec.toFixed(0)}s avg`);
+  if (trades > 0) parts.push(`${trades} trades`);
   return parts.join(" · ");
 }

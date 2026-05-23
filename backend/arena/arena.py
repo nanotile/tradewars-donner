@@ -129,6 +129,7 @@ class TraderSnapshot:
     holdings: dict[str, dict[str, float]]  # ticker → {quantity, avg_cost, current_price, market_value, unrealized_pnl}
     total_portfolio_value: float
     total_pnl: float
+    total_trades: int
 
 
 @dataclass
@@ -276,6 +277,7 @@ class Arena:
                 holdings=detail,
                 total_portfolio_value=value,
                 total_pnl=self.accounts.pnl(cfg.id, value),
+                total_trades=self.accounts.trade_count(cfg.id),
             ))
 
         assert self._started_at is not None
