@@ -101,7 +101,7 @@ def create_app(holder: ArenaHolder | None = None) -> FastAPI:
     @app.post("/arena/start")
     async def start(body: StartRequest | None = None) -> dict:
         if holder.arena is not None and holder.arena._final_snapshot is None:
-            raise HTTPException(status_code=409, detail="Arena already running")
+            await holder.arena.end()
         body = body or StartRequest()
         selections = (
             [s.model_dump() for s in body.selections] if body.selections is not None else None
