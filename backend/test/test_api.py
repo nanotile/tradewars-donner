@@ -273,3 +273,37 @@ def test_status_returns_running_snapshot_after_start(client):
     assert body["running"] is True
     assert body["snapshot"]["running"] is True
     assert len(body["snapshot"]["traders"]) == 4
+
+
+# ---- /arena/history ----
+
+def test_history_empty_initially(client):
+    r = client.get("/arena/history")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_history_records_game_after_stop(client):
+    client.post("/arena/start")
+    client.post("/arena/stop")
+    r = client.get("/arena/history")
+    assert r.status_code == 200
+    games = r.json()
+    assert len(games) == 1
+    game = games[0]
+    assert "final_results" in game
+    assert "started_at" in game
+    assert "ended_at" in game
+    assert "duration_seconds" in game
+    assert isinstance(game["final_results"], dict)
+    assert len(game["final_results"]) == 4
+
+
+def test_history_multiple_games_ordered_newest_first(client):
+    client.post("/arena/start")
+    client.post("/arena/stop")
+    client.post("/arena/start")
+    client.post("/arena/stop")
+    games = client.get("/arena/history").json()
+    assert len(games) == 2
+    assert games[0]["id"] > games[1]["id"]

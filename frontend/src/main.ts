@@ -4,12 +4,14 @@
 import {
   fetchArenaConfig,
   fetchArenaStatus,
+  fetchGameHistory,
   openStream,
   startArena,
   stopArena,
   tickArena,
   type ArenaConfigCatalog,
   type ArenaSnapshot,
+  type GameHistoryEntry,
   type PresetSelection,
   type TraderEvent,
 } from "./api";
@@ -108,6 +110,14 @@ function renderAuthUI(): void {
   nameSpan.className = "sidebar-user";
   nameSpan.textContent = user.display_name;
   sidebarAuth.append(nameSpan);
+
+  const historyBtn = document.createElement("button");
+  historyBtn.className = "sidebar-auth-btn";
+  historyBtn.setAttribute("aria-label", "Game history");
+  historyBtn.title = "Game history";
+  historyBtn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
+  historyBtn.addEventListener("click", openHistoryModal);
+  sidebarAuth.append(historyBtn);
 
   if (user.is_admin) {
     const adminBtn = document.createElement("button");
@@ -349,6 +359,66 @@ function markWinner(snap: ArenaSnapshot): void {
     if (tied) panel.setEndState(null);
     else panel.setEndState(t.trader_id === winnerId ? "winner" : "loser");
   }
+  showLeaderboard(snap);
+}
+
+// ---- Leaderboard overlay ----
+
+function showLeaderboard(snap: ArenaSnapshot): void {
+  document.querySelector(".leaderboard-overlay")?.remove();
+
+  const ranked = [...snap.traders].sort(
+    (a, b) => b.total_portfolio_value - a.total_portfolio_value,
+  );
+
+  const overlay = document.createElement("div");
+  overlay.className = "leaderboard-overlay";
+
+  const panel = document.createElement("div");
+  panel.className = "leaderboard-panel";
+
+  const header = document.createElement("div");
+  header.className = "leaderboard-header";
+  header.innerHTML = `<h2 class="leaderboard-title">Game Over</h2><button class="admin-close" aria-label="Close">&times;</button>`;
+  header.querySelector("button")!.addEventListener("click", () => overlay.remove());
+
+  const table = document.createElement("div");
+  table.className = "leaderboard-table";
+
+  ranked.forEach((t, i) => {
+    const pnl = t.total_pnl;
+    const usage = states.get(t.trader_id)?.totalUsage;
+    const totalTokens = usage ? usage.input_tokens + usage.output_tokens : 0;
+
+    const row = document.createElement("div");
+    row.className = "leaderboard-row";
+    if (i === 0) row.dataset.rank = "first";
+
+    row.innerHTML = `
+      <span class="leaderboard-rank">${i + 1}</span>
+      <span class="leaderboard-name">${t.trader_id}</span>
+      <span class="leaderboard-value">${fmtMoney(t.total_portfolio_value)}</span>
+      <span class="leaderboard-pnl" data-trend="${pnl >= 0 ? "up" : "down"}">${pnl >= 0 ? "+" : ""}${fmtMoney(pnl)}</span>
+      <span class="leaderboard-trades">${t.total_trades} trades</span>
+      <span class="leaderboard-tokens">${totalTokens > 0 ? fmtTokens(totalTokens) : "-"}</span>
+    `;
+    table.append(row);
+  });
+
+  panel.append(header, table);
+  overlay.append(panel);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.append(overlay);
+}
+
+function fmtMoney(n: number): string {
+  return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+}
+
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}k`;
+  return String(n);
 }
 
 function startTickLoop(): void {
@@ -395,6 +465,79 @@ function formatTraderLabel(name: string, reasoning: string): string {
 
 function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n));
+}
+
+// ---- History modal ----
+
+async function openHistoryModal(): Promise<void> {
+  document.querySelector(".history-overlay")?.remove();
+
+  const overlay = document.createElement("div");
+  overlay.className = "history-overlay admin-overlay";
+
+  const panel = document.createElement("div");
+  panel.className = "history-panel admin-panel";
+
+  const header = document.createElement("div");
+  header.className = "admin-header";
+  header.innerHTML = `<h2 class="admin-title">Game History</h2><button class="admin-close" aria-label="Close">&times;</button>`;
+  header.querySelector("button")!.addEventListener("click", () => overlay.remove());
+
+  const body = document.createElement("div");
+  body.className = "history-body";
+  body.textContent = "Loading…";
+
+  panel.append(header, body);
+  overlay.append(panel);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.append(overlay);
+
+  try {
+    const games = await fetchGameHistory();
+    renderHistoryGames(body, games);
+  } catch {
+    body.textContent = "Failed to load history.";
+  }
+}
+
+function renderHistoryGames(container: HTMLElement, games: GameHistoryEntry[]): void {
+  container.innerHTML = "";
+
+  if (games.length === 0) {
+    container.textContent = "No games played yet.";
+    return;
+  }
+
+  for (const game of games) {
+    const card = document.createElement("div");
+    card.className = "history-card";
+
+    const date = new Date(game.started_at);
+    const durMin = Math.round(game.duration_seconds / 60);
+    const ranked = Object.entries(game.final_results)
+      .sort(([, a], [, b]) => b - a);
+
+    let rows = "";
+    ranked.forEach(([name, pnl], i) => {
+      const trend = pnl >= 0 ? "up" : "down";
+      const sign = pnl >= 0 ? "+" : "";
+      rows += `<div class="history-result ${i === 0 ? "history-winner" : ""}">
+        <span class="history-rank">${i + 1}</span>
+        <span class="history-name">${name}</span>
+        <span class="history-pnl" data-trend="${trend}">${sign}${fmtMoney(pnl)}</span>
+      </div>`;
+    });
+
+    card.innerHTML = `
+      <div class="history-meta">
+        <span>${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+        <span>${durMin}m</span>
+        ${game.initiated_by ? `<span>${game.initiated_by}</span>` : ""}
+      </div>
+      <div class="history-results">${rows}</div>
+    `;
+    container.append(card);
+  }
 }
 
 // ---- Launch ----

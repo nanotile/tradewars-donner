@@ -195,6 +195,10 @@ def create_app(holder: ArenaHolder | None = None) -> FastAPI:
     def health() -> dict:
         return {"status": "ok", "uptime_seconds": round(time.monotonic() - _APP_START_TIME, 1)}
 
+    @app.get("/arena/history")
+    def get_history() -> list[dict]:
+        return holder.accounts.list_games()
+
     @app.get("/arena/config")
     def get_config() -> dict:
         """Catalog + presets so the sidebar can populate dropdowns."""

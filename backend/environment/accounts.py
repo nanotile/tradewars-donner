@@ -225,7 +225,7 @@ class Accounts:
 
     def list_games(self) -> list[dict]:
         rows = self.conn.execute(
-            "SELECT id, started_at, ended_at, duration_seconds, final_results FROM games ORDER BY id DESC"
+            "SELECT id, started_at, ended_at, duration_seconds, final_results, initiated_by FROM games ORDER BY id DESC"
         ).fetchall()
         return [
             {**dict(r), "final_results": json.loads(r["final_results"])}

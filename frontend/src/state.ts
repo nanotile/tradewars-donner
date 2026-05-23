@@ -13,6 +13,13 @@ export interface ChartPoint {
   value: number;
 }
 
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  reasoning_tokens: number;
+}
+
 export interface CycleStats {
   cyclesPerMinute: number | null;
   avgDurationSeconds: number | null;
@@ -25,6 +32,7 @@ export class TraderState {
   chart: ChartPoint[] = [];
   log: TraderEvent[] = [];
   previousPrices: Record<string, number> = {};
+  totalUsage: TokenUsage = { input_tokens: 0, output_tokens: 0, cached_tokens: 0, reasoning_tokens: 0 };
 
   private _cycleStarts = new Map<number, number>();
   private _cycleDurations: number[] = [];
@@ -89,7 +97,16 @@ export class TraderState {
       const ts = new Date(ev.timestamp).getTime();
       this._cycleStarts.set(ev.payload.cycle as number, ts);
       this._cycleCount++;
-    } else if (ev.type === "cycle_end" || ev.type === "error") {
+    } else if (ev.type === "cycle_end") {
+      const u = ev.payload.usage as TokenUsage | undefined;
+      if (u) {
+        this.totalUsage.input_tokens += u.input_tokens || 0;
+        this.totalUsage.output_tokens += u.output_tokens || 0;
+        this.totalUsage.cached_tokens += u.cached_tokens || 0;
+        this.totalUsage.reasoning_tokens += u.reasoning_tokens || 0;
+      }
+    }
+    if (ev.type === "cycle_end" || ev.type === "error") {
       const cycleNum = ev.payload.cycle as number | undefined;
       if (cycleNum !== undefined) {
         const startTs = this._cycleStarts.get(cycleNum);
@@ -108,6 +125,7 @@ export class TraderState {
     this.chart = [];
     this.log = [];
     this.previousPrices = {};
+    this.totalUsage = { input_tokens: 0, output_tokens: 0, cached_tokens: 0, reasoning_tokens: 0 };
     this._cycleStarts.clear();
     this._cycleDurations = [];
     this._cycleCount = 0;

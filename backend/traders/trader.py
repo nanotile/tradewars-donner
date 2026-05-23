@@ -60,6 +60,40 @@ def _format_output(out: Any) -> str:
     return str(out)
 
 
+def _extract_usage(result: Any) -> dict[str, int] | None:
+    """Sum token usage across all raw model responses in a completed streaming run."""
+    try:
+        responses = getattr(result, "raw_responses", None)
+        if not responses:
+            return None
+        input_tokens = 0
+        output_tokens = 0
+        cached_tokens = 0
+        reasoning_tokens = 0
+        for resp in responses:
+            u = getattr(resp, "usage", None)
+            if u is None:
+                continue
+            input_tokens += getattr(u, "input_tokens", 0) or 0
+            output_tokens += getattr(u, "output_tokens", 0) or 0
+            details_in = getattr(u, "input_tokens_details", None)
+            if details_in:
+                cached_tokens += getattr(details_in, "cached_tokens", 0) or 0
+            details_out = getattr(u, "output_tokens_details", None)
+            if details_out:
+                reasoning_tokens += getattr(details_out, "reasoning_tokens", 0) or 0
+        if input_tokens == 0 and output_tokens == 0:
+            return None
+        return {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cached_tokens": cached_tokens,
+            "reasoning_tokens": reasoning_tokens,
+        }
+    except Exception:
+        return None
+
+
 @dataclass
 class TraderEvent:
     trader_id: str
@@ -109,7 +143,11 @@ class Trader:
 
             rationale = (result.final_output or "").strip()
             self.previous_rationale = rationale[:RATIONALE_MAX_CHARS]
-            await self._emit("cycle_end", {"cycle": self.cycle_count, "rationale": self.previous_rationale})
+            usage = _extract_usage(result)
+            payload: dict[str, Any] = {"cycle": self.cycle_count, "rationale": self.previous_rationale}
+            if usage:
+                payload["usage"] = usage
+            await self._emit("cycle_end", payload)
 
         except Exception as e:
             logger.exception("cycle %s failed for %s", self.cycle_count, self.config.id)

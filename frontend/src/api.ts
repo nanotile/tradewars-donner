@@ -114,6 +114,21 @@ export async function fetchArenaStatus(): Promise<ArenaStatus> {
   return r.json();
 }
 
+export interface GameHistoryEntry {
+  id: number;
+  started_at: string;
+  ended_at: string;
+  duration_seconds: number;
+  final_results: Record<string, number>;
+  initiated_by: string | null;
+}
+
+export async function fetchGameHistory(): Promise<GameHistoryEntry[]> {
+  const r = await apiFetch("/arena/history");
+  if (!r.ok) throw new Error(`history failed: ${r.status}`);
+  return r.json();
+}
+
 const SSE_RECONNECT_BASE_MS = 1000;
 const SSE_RECONNECT_MAX_MS = 30000;
 
