@@ -1,5 +1,7 @@
 // Typed client for the Tradewars FastAPI backend.
 
+import { apiFetch, apiPost, getToken } from "./apiClient";
+
 export interface HoldingDetail {
   quantity: number;
   avg_cost: number;
@@ -65,11 +67,7 @@ export interface TraderEvent {
 }
 
 async function post(path: string, body?: unknown): Promise<Response> {
-  return fetch(path, {
-    method: "POST",
-    headers: body ? { "Content-Type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  return apiPost(path, body);
 }
 
 export interface StartOptions {
@@ -99,7 +97,7 @@ export async function tickArena(): Promise<ArenaSnapshot> {
 }
 
 export async function fetchArenaConfig(): Promise<ArenaConfigCatalog> {
-  const r = await fetch("/arena/config");
+  const r = await apiFetch("/arena/config");
   if (!r.ok) throw new Error(`config failed: ${r.status}`);
   return r.json();
 }
@@ -108,7 +106,11 @@ export function openStream(
   onEvent: (event: TraderEvent) => void,
   onError?: (err: Event) => void,
 ): EventSource {
-  const es = new EventSource("/arena/stream");
+  const token = getToken();
+  const url = token
+    ? `/arena/stream?token=${encodeURIComponent(token)}`
+    : "/arena/stream";
+  const es = new EventSource(url);
   const dispatch = (e: MessageEvent) => {
     try {
       onEvent(JSON.parse(e.data));

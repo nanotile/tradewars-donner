@@ -1,0 +1,121 @@
+"""
+Module: Auth API Routes
+Version: 1.0.0
+Development Iteration: v1
+Developer: Kent Benson
+
+UV Environment: uv run uvicorn --factory backend.api.app:create_app --port 8000
+
+Login endpoint + token validation. Rate-limited to 5/min on login.
+"""
+
+from fastapi import APIRouter, HTTPException, Request, Depends
+from pydantic import BaseModel, Field
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+from backend.auth import (
+    AUTH_SECRET_KEY,
+    authenticate_user,
+    create_access_token,
+    decode_token,
+    bump_jwt_version,
+    _load_users,
+    _save_users,
+    verify_password,
+    hash_password,
+    verify_auth,
+)
+
+limiter = Limiter(key_func=get_remote_address)
+
+router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(..., max_length=100)
+    password: str = Field(..., max_length=200)
+
+
+@router.post("/login")
+@limiter.limit("5/minute")
+async def login(request: Request, body: LoginRequest):
+    if not AUTH_SECRET_KEY:
+        return {
+            "token": "",
+            "username": "dev",
+            "display_name": "Dev Mode",
+            "expires_at": None,
+            "auth_disabled": True,
+        }
+
+    user = authenticate_user(body.username, body.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    token, expires_at = create_access_token(user["username"])
+    return {
+        "token": token,
+        "username": user["username"],
+        "display_name": user["display_name"],
+        "is_admin": user.get("is_admin", False),
+        "expires_at": expires_at.isoformat(),
+    }
+
+
+@router.get("/me")
+async def me(request: Request):
+    if not AUTH_SECRET_KEY:
+        return {
+            "username": "dev",
+            "display_name": "Dev Mode",
+            "auth_disabled": True,
+        }
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    token = auth_header[7:]
+    username = decode_token(token)
+    if not username:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    users = _load_users()
+    user = users.get(username)
+    if not user:
+        raise HTTPException(status_code=401, detail="User no longer exists")
+
+    return {
+        "username": username,
+        "display_name": user.get("display_name", username),
+        "is_admin": user.get("is_admin", False),
+    }
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., max_length=200)
+    new_password: str = Field(..., min_length=6, max_length=200)
+
+
+@router.post("/change-password")
+async def change_password(
+    request: Request,
+    body: ChangePasswordRequest,
+    username: str = Depends(verify_auth),
+):
+    if not AUTH_SECRET_KEY:
+        return {"ok": True, "message": "Auth disabled in dev mode"}
+
+    users = _load_users()
+    user = users.get(username)
+    if not user:
+        raise HTTPException(status_code=401, detail="User no longer exists")
+
+    if not verify_password(body.current_password, user["password_hash"]):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    users[username]["password_hash"] = hash_password(body.new_password)
+    _save_users(users)
+    bump_jwt_version(username)
+    return {"ok": True, "message": "Password changed - all other sessions have been signed out"}

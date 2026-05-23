@@ -32,6 +32,12 @@ class _FakePrices:
 
 
 @pytest.fixture(autouse=True)
+def disable_auth(monkeypatch):
+    import backend.auth
+    monkeypatch.setattr(backend.auth, "AUTH_SECRET_KEY", "")
+
+
+@pytest.fixture(autouse=True)
 def neutralize_trader_loop(monkeypatch):
     async def _noop(self, stop_event: asyncio.Event):
         await stop_event.wait()

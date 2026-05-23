@@ -6,6 +6,12 @@ Endpoints:
   POST /arena/stop     — manual end, return final snapshot
   POST /arena/tick     — UI heartbeat, return current snapshot
   GET  /arena/stream   — SSE stream of TraderEvents
+  POST /api/auth/login — JWT login
+  GET  /api/auth/me    — validate token
+  POST /api/auth/change-password
+  GET  /api/admin/users — list users (admin)
+  POST /api/admin/users — create user (admin)
+  DELETE /api/admin/users/{username} — delete user (admin)
 
 Single arena per process. Running state lives in the ArenaHolder (so the
 instance can be swapped across games while routes stay bound to the holder).
@@ -17,14 +23,21 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from sse_starlette.sse import EventSourceResponse
 
 from backend.arena.arena import Arena, ArenaConfig, DEFAULT_CONFIG_PATH
+import backend.auth as _auth_mod
 from backend.environment.accounts import Accounts
 from backend.environment.prices import Prices
+from backend.routers.auth_routes import limiter, router as auth_router
+from backend.routers.admin_routes import router as admin_router
 
 # In production (Docker) the built frontend is copied alongside the backend.
 # In local dev the frontend lives at frontend/dist after `npm run build`.
@@ -92,6 +105,57 @@ def create_app(holder: ArenaHolder | None = None) -> FastAPI:
     app = FastAPI(title="Tradewars")
     holder = holder or ArenaHolder()
     app.state.arena_holder = holder
+
+    # CORS
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+            "https://tradewars.kentbenson.net",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["Content-Type", "Authorization"],
+    )
+
+    # Rate limiter (shared with auth_routes)
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+    # Auth + admin routers
+    app.include_router(auth_router)
+    app.include_router(admin_router)
+
+    # JWT middleware — protects /arena/* routes
+    @app.middleware("http")
+    async def auth_middleware(request: Request, call_next):
+        if not _auth_mod.AUTH_SECRET_KEY:
+            return await call_next(request)
+        path = request.url.path
+        if not path.startswith("/arena/"):
+            return await call_next(request)
+        if request.method == "OPTIONS":
+            return await call_next(request)
+        auth_header = request.headers.get("Authorization", "")
+        token = None
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+        else:
+            # SSE EventSource can't send headers — accept token as query param
+            token = request.query_params.get("token")
+        if not token:
+            return JSONResponse(
+                status_code=401, content={"detail": "Not authenticated"}
+            )
+        username = _auth_mod.decode_token(token)
+        if not username:
+            return JSONResponse(
+                status_code=401, content={"detail": "Invalid or expired token"}
+            )
+        return await call_next(request)
 
     @app.get("/arena/config")
     def get_config() -> dict:
