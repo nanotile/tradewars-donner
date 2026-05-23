@@ -103,6 +103,17 @@ export async function fetchArenaConfig(): Promise<ArenaConfigCatalog> {
   return r.json();
 }
 
+export interface ArenaStatus {
+  running: boolean;
+  snapshot?: ArenaSnapshot;
+}
+
+export async function fetchArenaStatus(): Promise<ArenaStatus> {
+  const r = await apiFetch("/arena/status");
+  if (!r.ok) throw new Error(`status failed: ${r.status}`);
+  return r.json();
+}
+
 const SSE_RECONNECT_BASE_MS = 1000;
 const SSE_RECONNECT_MAX_MS = 30000;
 

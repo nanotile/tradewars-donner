@@ -1,10 +1,12 @@
 """FastAPI app fronting the Arena.
 
 Endpoints:
+  GET  /health         — no-auth uptime check
   GET  /arena/config   — model catalog + presets + duration / max_tokens
+  GET  /arena/status   — is a game running + optional snapshot
   POST /arena/start    — reset + launch traders, return started snapshot
   POST /arena/stop     — manual end, return final snapshot
-  POST /arena/tick     — UI heartbeat, return current snapshot
+  POST /arena/tick     — UI heartbeat, return current snapshot (2/s limit)
   GET  /arena/stream   — SSE stream of TraderEvents
   POST /api/auth/login — JWT login
   GET  /api/auth/me    — validate token
@@ -21,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -110,6 +113,9 @@ class ArenaHolder:
 _logger = logging.getLogger(__name__)
 
 
+_APP_START_TIME = time.monotonic()
+
+
 def create_app(holder: ArenaHolder | None = None) -> FastAPI:
     _auth_mod.check_auth_config()
 
@@ -146,7 +152,7 @@ def create_app(holder: ArenaHolder | None = None) -> FastAPI:
         if _auth_mod.DEV_MODE and not _auth_mod.AUTH_SECRET_KEY:
             return await call_next(request)
         path = request.url.path
-        if not path.startswith("/arena/"):
+        if path == "/health" or not path.startswith("/arena/"):
             return await call_next(request)
         if request.method == "OPTIONS":
             return await call_next(request)
@@ -185,10 +191,22 @@ def create_app(holder: ArenaHolder | None = None) -> FastAPI:
         response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
         return response
 
+    @app.get("/health")
+    def health() -> dict:
+        return {"status": "ok", "uptime_seconds": round(time.monotonic() - _APP_START_TIME, 1)}
+
     @app.get("/arena/config")
     def get_config() -> dict:
         """Catalog + presets so the sidebar can populate dropdowns."""
         return json.loads(Path(holder.config_path).read_text())
+
+    @app.get("/arena/status")
+    async def status() -> dict:
+        arena = holder.arena
+        if arena is None or arena._started_at is None:
+            return {"running": False}
+        snap = await arena.tick()
+        return {"running": snap.running, "snapshot": asdict(snap)}
 
     @app.post("/arena/start")
     async def start(request: Request, body: StartRequest | None = None) -> dict:
@@ -220,7 +238,8 @@ def create_app(holder: ArenaHolder | None = None) -> FastAPI:
         return asdict(snap)
 
     @app.post("/arena/tick")
-    async def tick() -> dict:
+    @limiter.limit("2/second")
+    async def tick(request: Request) -> dict:
         arena = holder.require()
         snap = await arena.tick()
         return asdict(snap)

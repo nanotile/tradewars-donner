@@ -64,6 +64,7 @@ def holder(tmp_path):
 @pytest.fixture
 def client(holder):
     app = create_app(holder=holder)
+    app.state.limiter.enabled = False
     with TestClient(app) as c:
         yield c
 
@@ -242,3 +243,33 @@ async def test_stream_yields_sse_frame_for_queued_event(holder):
         break
 
     await holder.arena.end()
+
+
+# ---- /health ----
+
+def test_health_returns_ok_and_uptime(client):
+    r = client.get("/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["uptime_seconds"] >= 0
+
+
+# ---- /arena/status ----
+
+def test_status_returns_not_running_initially(client):
+    r = client.get("/arena/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["running"] is False
+    assert "snapshot" not in body
+
+
+def test_status_returns_running_snapshot_after_start(client):
+    client.post("/arena/start")
+    r = client.get("/arena/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["running"] is True
+    assert body["snapshot"]["running"] is True
+    assert len(body["snapshot"]["traders"]) == 4

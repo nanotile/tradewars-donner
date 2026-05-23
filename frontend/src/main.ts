@@ -3,6 +3,7 @@
 
 import {
   fetchArenaConfig,
+  fetchArenaStatus,
   openStream,
   startArena,
   stopArena,
@@ -18,6 +19,7 @@ import { showLoginPage, hideLoginPage } from "./login";
 import { TraderPanel } from "./panel";
 import { TraderState } from "./state";
 import { initTheme } from "./theme";
+import { showToast } from "./toast";
 import { mountTopBar } from "./topbar";
 
 const TICK_MS = 1000;
@@ -133,8 +135,30 @@ function loadConfig(): void {
       selections = [...c.presets.eco];
       renderSlots();
       configLoaded = true;
+      checkRunningGame();
     })
-    .catch((err) => console.error("config fetch failed", err));
+    .catch((err) => {
+      console.error("config fetch failed", err);
+      showToast("Failed to load arena config");
+    });
+}
+
+function checkRunningGame(): void {
+  fetchArenaStatus()
+    .then((st) => {
+      if (st.running && st.snapshot) {
+        durationSeconds =
+          st.snapshot.time_elapsed_seconds + st.snapshot.time_remaining_seconds;
+        durationInput.value = String(Math.round(durationSeconds / 60));
+        hydratePanels(st.snapshot);
+        applySnapshot(st.snapshot);
+        openEventStream();
+        startTickLoop();
+        bar.setRunning(true);
+        setControlsDisabled(true);
+      }
+    })
+    .catch(() => {});
 }
 
 // ---- Wire start/stop/preset buttons ----
@@ -143,6 +167,10 @@ ecoBtn.addEventListener("click", () => applyPreset("eco"));
 maxBtn.addEventListener("click", () => applyPreset("max"));
 
 bar.startBtn.addEventListener("click", async () => {
+  if (tickTimer !== null) {
+    const ok = confirm("A game is already running. Start a new one?");
+    if (!ok) return;
+  }
   bar.startBtn.disabled = true;
   try {
     const minutes = clamp(
@@ -152,6 +180,7 @@ bar.startBtn.addEventListener("click", async () => {
     );
     durationInput.value = String(minutes);
     durationSeconds = minutes * 60;
+    teardown();
     panels.clear();
     states.clear();
     panelHost.innerHTML = "";
@@ -164,6 +193,7 @@ bar.startBtn.addEventListener("click", async () => {
     setControlsDisabled(true);
   } catch (err) {
     console.error(err);
+    showToast("Failed to start game");
     bar.setRunning(false);
   }
 });
@@ -176,6 +206,7 @@ bar.stopBtn.addEventListener("click", async () => {
     teardown();
   } catch (err) {
     console.error(err);
+    showToast("Failed to stop game");
   } finally {
     bar.setRunning(false);
   }
@@ -328,14 +359,15 @@ function startTickLoop(): void {
       applySnapshot(snap);
     } catch (err) {
       console.error("tick failed", err);
+      showToast("Tick update failed");
     }
   }, TICK_MS);
 }
 
 function openEventStream(): void {
-  stream = openStream(onTraderEvent, (err) =>
-    console.warn("stream error", err),
-  );
+  stream = openStream(onTraderEvent, () => {
+    showToast("Event stream disconnected — reconnecting…", "info");
+  });
 }
 
 function onTraderEvent(ev: TraderEvent): void {
