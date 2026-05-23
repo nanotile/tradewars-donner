@@ -27,8 +27,8 @@ from backend.auth import (
     bump_jwt_version,
     check_lockout,
     record_login_failure,
-    _load_users,
-    _save_users,
+    load_users,
+    save_users,
     verify_password,
     hash_password,
     verify_auth,
@@ -94,7 +94,7 @@ async def me(request: Request):
     if not username:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-    users = _load_users()
+    users = load_users()
     user = users.get(username)
     if not user:
         raise HTTPException(status_code=401, detail="User no longer exists")
@@ -120,7 +120,7 @@ async def change_password(
     if _auth_mod.DEV_MODE and not _auth_mod.AUTH_SECRET_KEY:
         return {"ok": True, "message": "Auth disabled in dev mode"}
 
-    users = _load_users()
+    users = load_users()
     user = users.get(username)
     if not user:
         raise HTTPException(status_code=401, detail="User no longer exists")
@@ -129,7 +129,7 @@ async def change_password(
         raise HTTPException(status_code=400, detail="Current password is incorrect")
 
     users[username]["password_hash"] = hash_password(body.new_password)
-    _save_users(users)
+    save_users(users)
     bump_jwt_version(username)
     return {"ok": True, "message": "Password changed - all other sessions have been signed out"}
 

@@ -8,43 +8,17 @@ FastAPI's TestClient.
 
 from __future__ import annotations
 
-import asyncio
 import json
 
 import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.app import ArenaHolder, create_app
-from backend.arena import arena as arena_mod
 from backend.arena.arena import DEFAULT_CONFIG_PATH
 from backend.environment.accounts import Accounts
+from backend.test.conftest import FakePrices
 
-
-class _FakePrices:
-    def __init__(self, prices: dict[str, float]):
-        self._prices = {k.upper(): v for k, v in prices.items()}
-
-    async def aget_price(self, ticker: str) -> float:
-        return self._prices[ticker.upper()]
-
-    async def aget_prices(self, tickers: list[str]) -> dict[str, float]:
-        return {t: self._prices[t.upper()] for t in tickers}
-
-
-@pytest.fixture(autouse=True)
-def disable_auth(monkeypatch):
-    import backend.auth
-    monkeypatch.setattr(backend.auth, "AUTH_SECRET_KEY", "")
-    monkeypatch.setattr(backend.auth, "DEV_MODE", True)
-
-
-@pytest.fixture(autouse=True)
-def neutralize_trader_loop(monkeypatch):
-    async def _noop(self, stop_event: asyncio.Event):
-        await stop_event.wait()
-
-    monkeypatch.setattr(arena_mod.Trader, "run_until_stopped", _noop)
-    monkeypatch.setattr(arena_mod, "wipe_memory_files", lambda _tids: None)
+pytestmark = pytest.mark.usefixtures("disable_auth", "neutralize_trader_loop")
 
 
 @pytest.fixture
@@ -55,7 +29,7 @@ def holder(tmp_path):
     h.config_path = DEFAULT_CONFIG_PATH
     h.db_path = tmp_path / "test.sqlite"
     h.accounts = Accounts(":memory:")
-    h.prices = _FakePrices({})
+    h.prices = FakePrices({})
     h.arena = None
     yield h
     h.accounts.close()

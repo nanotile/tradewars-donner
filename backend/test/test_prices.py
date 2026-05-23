@@ -12,6 +12,15 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _verify_massive_api_reachable():
+    """Skip the entire module if the Massive API rejects our key."""
+    try:
+        Prices().get_price("AAPL")
+    except Exception as exc:
+        pytest.skip(f"Massive API unavailable: {exc}")
+
+
 def test_get_price_returns_positive_float():
     p = Prices()
     price = p.get_price("AAPL")

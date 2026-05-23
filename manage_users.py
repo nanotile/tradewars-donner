@@ -14,11 +14,11 @@ Passwords are bcrypt-hashed before storage.
 import getpass
 import sys
 
-from backend.auth import USERS_FILE, _load_users, _save_users, hash_password
+from backend.auth import USERS_FILE, load_users, save_users, hash_password
 
 
 def cmd_add(username: str, display_name: str):
-    users = _load_users()
+    users = load_users()
     if username in users:
         print(f"User '{username}' already exists. Use 'remove' first to reset.")
         sys.exit(1)
@@ -36,23 +36,23 @@ def cmd_add(username: str, display_name: str):
         "display_name": display_name,
         "password_hash": hash_password(password),
     }
-    _save_users(users)
+    save_users(users)
     print(f"Added user '{username}' ({display_name})")
     print(f"Users file: {USERS_FILE}")
 
 
 def cmd_remove(username: str):
-    users = _load_users()
+    users = load_users()
     if username not in users:
         print(f"User '{username}' not found.")
         sys.exit(1)
     del users[username]
-    _save_users(users)
+    save_users(users)
     print(f"Removed user '{username}'")
 
 
 def cmd_list():
-    users = _load_users()
+    users = load_users()
     if not users:
         print("No users configured.")
         return

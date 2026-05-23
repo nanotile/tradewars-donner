@@ -47,7 +47,7 @@ _users_cache: dict | None = None
 _users_mtime: float = 0.0
 
 
-def _load_users() -> dict:
+def load_users() -> dict:
     global _users_cache, _users_mtime
     if not USERS_FILE.exists():
         _users_cache = {}
@@ -66,7 +66,7 @@ def _load_users() -> dict:
         return {}
 
 
-def _save_users(users: dict):
+def save_users(users: dict):
     global _users_cache, _users_mtime
     USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(USERS_FILE, "w") as f:
@@ -86,7 +86,7 @@ def hash_password(password: str) -> str:
 
 def authenticate_user(username: str, password: str) -> Optional[dict]:
     username = username.strip().lower()
-    users = _load_users()
+    users = load_users()
     user = users.get(username)
     if not user:
         return None
@@ -100,7 +100,7 @@ def authenticate_user(username: str, password: str) -> Optional[dict]:
 
 
 def create_access_token(username: str) -> tuple[str, datetime]:
-    users = _load_users()
+    users = load_users()
     jwt_version = users.get(username, {}).get("jwt_version", 0)
     expires_at = datetime.now(timezone.utc) + timedelta(days=TOKEN_EXPIRE_DAYS)
     payload = {
@@ -119,7 +119,7 @@ def decode_token(token: str) -> Optional[str]:
         if not username:
             return None
         token_version = payload.get("jv", 0)
-        users = _load_users()
+        users = load_users()
         current_version = users.get(username, {}).get("jwt_version", 0)
         if token_version < current_version:
             return None
@@ -129,10 +129,10 @@ def decode_token(token: str) -> Optional[str]:
 
 
 def bump_jwt_version(username: str):
-    users = _load_users()
+    users = load_users()
     if username in users:
         users[username]["jwt_version"] = users[username].get("jwt_version", 0) + 1
-        _save_users(users)
+        save_users(users)
         logger.info("JWT version bumped for user '%s'", username)
 
 
@@ -149,7 +149,7 @@ def verify_auth(request: Request):
     if not username:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-    users = _load_users()
+    users = load_users()
     if username not in users:
         raise HTTPException(status_code=401, detail="User no longer exists")
 
@@ -161,7 +161,7 @@ def verify_admin(request: Request) -> str:
     if DEV_MODE and not AUTH_SECRET_KEY:
         return username
 
-    users = _load_users()
+    users = load_users()
     user = users.get(username, {})
     if not user.get("is_admin", False):
         raise HTTPException(status_code=403, detail="Admin access required")

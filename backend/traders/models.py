@@ -24,6 +24,13 @@ from agents.extensions.models.litellm_model import LitellmModel
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from openai.types.shared import Reasoning
 
+def _require_env(key: str) -> str:
+    val = os.environ.get(key)
+    if not val:
+        raise RuntimeError(f"{key} is not set — add it to .env or export it")
+    return val
+
+
 _ANTHROPIC_PATCHED = False
 
 
@@ -66,17 +73,17 @@ def build_model(config: TraderConfig) -> Any:
         _install_anthropic_monkey_patch()
         return LitellmModel(
             model=config.model,
-            api_key=os.environ["ANTHROPIC_API_KEY"],
+            api_key=_require_env("ANTHROPIC_API_KEY"),
         )
     if config.provider == "google":
         return LitellmModel(
             model=config.model,
-            api_key=os.environ["GOOGLE_API_KEY"],
+            api_key=_require_env("GOOGLE_API_KEY"),
         )
     if config.provider == "deepseek":
         client = AsyncOpenAI(
             base_url="https://api.deepseek.com",
-            api_key=os.environ["DEEPSEEK_API_KEY"],
+            api_key=_require_env("DEEPSEEK_API_KEY"),
         )
         return OpenAIChatCompletionsModel(
             model=config.model,
@@ -85,7 +92,7 @@ def build_model(config: TraderConfig) -> Any:
     if config.provider == "openrouter":
         client = AsyncOpenAI(
             base_url="https://openrouter.ai/api/v1",
-            api_key=os.environ["OPENROUTER_API_KEY"],
+            api_key=_require_env("OPENROUTER_API_KEY"),
         )
         return OpenAIChatCompletionsModel(
             model=config.model,

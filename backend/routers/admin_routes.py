@@ -14,7 +14,7 @@ import re
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from backend.auth import verify_admin, _load_users, _save_users, hash_password
+from backend.auth import verify_admin, load_users, save_users, hash_password
 
 _USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.@+\-]+$")
 
@@ -30,7 +30,7 @@ class CreateUserRequest(BaseModel):
 @router.get("/users")
 async def list_users(request: Request):
     verify_admin(request)
-    users = _load_users()
+    users = load_users()
     return [
         {
             "username": uname,
@@ -45,7 +45,7 @@ async def list_users(request: Request):
 async def create_user(request: Request, body: CreateUserRequest):
     verify_admin(request)
     username = body.username.strip().lower()
-    users = _load_users()
+    users = load_users()
 
     if username in users:
         raise HTTPException(status_code=409, detail="User already exists")
@@ -55,7 +55,7 @@ async def create_user(request: Request, body: CreateUserRequest):
         "password_hash": hash_password(body.password),
         "is_admin": False,
     }
-    _save_users(users)
+    save_users(users)
     return {
         "username": username,
         "display_name": body.display_name,
@@ -73,10 +73,10 @@ async def delete_user(request: Request, username: str):
     if username == admin:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
 
-    users = _load_users()
+    users = load_users()
     if username not in users:
         raise HTTPException(status_code=404, detail="User not found")
 
     del users[username]
-    _save_users(users)
+    save_users(users)
     return {"deleted": username}

@@ -7,34 +7,15 @@ a row is written to the games history table.
 """
 
 import asyncio
-from datetime import datetime, timezone
 
 import pytest
 
-from backend.arena import arena as arena_mod
 from backend.arena.arena import Arena, ArenaConfig
 from backend.environment.accounts import INITIAL_BALANCE, Accounts
 from backend.traders.models import TraderConfig
+from backend.test.conftest import FakePrices
 
-
-class FakePrices:
-    def __init__(self, prices: dict[str, float]):
-        self._prices = {k.upper(): v for k, v in prices.items()}
-
-    async def aget_price(self, ticker: str) -> float:
-        return self._prices[ticker.upper()]
-
-    async def aget_prices(self, tickers: list[str]) -> dict[str, float]:
-        return {t: self._prices[t.upper()] for t in tickers}
-
-
-@pytest.fixture(autouse=True)
-def neutralize_trader_loop(monkeypatch):
-    """Replace Trader.run_until_stopped with a no-op so we don't need MCPs / network."""
-    async def _noop(self, stop_event: asyncio.Event):
-        await stop_event.wait()
-
-    monkeypatch.setattr(arena_mod.Trader, "run_until_stopped", _noop)
+pytestmark = pytest.mark.usefixtures("neutralize_trader_loop")
 
 
 @pytest.fixture
@@ -52,19 +33,7 @@ def mini_config():
     )
 
 
-@pytest.fixture
-def accounts():
-    a = Accounts(":memory:")
-    yield a
-    a.close()
-
-
-@pytest.fixture
-def skip_memory_wipe(monkeypatch):
-    monkeypatch.setattr(arena_mod, "wipe_memory_files", lambda _tids: None)
-
-
-async def test_start_wipes_state_and_creates_fresh_traders(mini_config, accounts, skip_memory_wipe):
+async def test_start_wipes_state_and_creates_fresh_traders(mini_config, accounts):
     # seed some prior state to prove start() wipes it
     accounts.create_trader("stale")
     accounts.execute_trade("stale", "OLD", 1, 10)
@@ -82,7 +51,7 @@ async def test_start_wipes_state_and_creates_fresh_traders(mini_config, accounts
     await asyncio.gather(*arena._tasks, return_exceptions=True)
 
 
-async def test_tick_returns_snapshot_with_all_traders(mini_config, accounts, skip_memory_wipe):
+async def test_tick_returns_snapshot_with_all_traders(mini_config, accounts):
     arena = Arena(config=mini_config, accounts=accounts, prices=FakePrices({"AAPL": 100.0}))
     await arena.start()
 
@@ -97,7 +66,7 @@ async def test_tick_returns_snapshot_with_all_traders(mini_config, accounts, ski
     await asyncio.gather(*arena._tasks, return_exceptions=True)
 
 
-async def test_end_liquidates_holdings_and_records_game(mini_config, accounts, skip_memory_wipe):
+async def test_end_liquidates_holdings_and_records_game(mini_config, accounts):
     arena = Arena(
         config=mini_config,
         accounts=accounts,
@@ -126,7 +95,7 @@ async def test_end_liquidates_holdings_and_records_game(mini_config, accounts, s
     assert games[0]["final_results"]["t0"] == pytest.approx(100.0)
 
 
-async def test_end_is_idempotent(mini_config, accounts, skip_memory_wipe):
+async def test_end_is_idempotent(mini_config, accounts):
     arena = Arena(config=mini_config, accounts=accounts, prices=FakePrices({}))
     await arena.start()
     snap1 = await arena.end()
@@ -136,7 +105,7 @@ async def test_end_is_idempotent(mini_config, accounts, skip_memory_wipe):
     assert len(accounts.list_games()) == 1
 
 
-async def test_start_twice_raises(mini_config, accounts, skip_memory_wipe):
+async def test_start_twice_raises(mini_config, accounts):
     arena = Arena(config=mini_config, accounts=accounts, prices=FakePrices({}))
     await arena.start()
     with pytest.raises(RuntimeError, match="already started"):
@@ -151,7 +120,7 @@ async def test_tick_before_start_raises(mini_config, accounts):
         await arena.tick()
 
 
-async def test_auto_end_fires_when_duration_elapses(accounts, skip_memory_wipe):
+async def test_auto_end_fires_when_duration_elapses(accounts):
     """With a tiny duration, the arena should end itself without a manual call."""
     config = ArenaConfig(
         duration_seconds=0.2,
@@ -171,7 +140,7 @@ async def test_auto_end_fires_when_duration_elapses(accounts, skip_memory_wipe):
 
 
 async def test_liquidation_falls_back_to_last_tick_price_if_live_lookup_fails(
-    mini_config, accounts, skip_memory_wipe,
+    mini_config, accounts,
 ):
     class FlakeyPrices:
         def __init__(self):

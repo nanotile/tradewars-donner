@@ -5,20 +5,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from backend.environment.accounts import INITIAL_BALANCE, Accounts
+from backend.test.conftest import FakePrices
 from backend.traders.tools import TraderContext, get_state_impl, trade_impl
-
-
-class FakePrices:
-    """Stand-in for backend.environment.prices.Prices using a static dict."""
-
-    def __init__(self, prices: dict[str, float]):
-        self._prices = {k.upper(): v for k, v in prices.items()}
-
-    async def aget_price(self, ticker: str) -> float:
-        return self._prices[ticker.upper()]
-
-    async def aget_prices(self, tickers: list[str]) -> dict[str, float]:
-        return {t: self._prices[t.upper()] for t in tickers}
 
 
 @pytest.fixture
