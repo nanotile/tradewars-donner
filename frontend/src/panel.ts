@@ -71,12 +71,19 @@ export class TraderPanel {
     }
     const { cyclesPerMinute, avgDurationSeconds } = this.state.cycleStats;
     const trades = snap ? snap.total_trades : 0;
+    const u = this.state.totalUsage;
+    const totalTokens = u.input_tokens + u.output_tokens;
     this.statsEl.textContent = formatCycleStats(
       cyclesPerMinute,
       avgDurationSeconds,
       trades,
+      totalTokens,
     );
     if (this.chart) this.chart.update(this.state.chart, STARTING_CASH);
+    this.log.render(this.state.log);
+  }
+
+  updateLog(): void {
     this.log.render(this.state.log);
   }
 }
@@ -93,11 +100,19 @@ function formatCycleStats(
   rpm: number | null,
   avgSec: number | null,
   trades: number,
+  totalTokens: number,
 ): string {
-  if (rpm === null && avgSec === null && trades === 0) return "";
+  if (rpm === null && avgSec === null && trades === 0 && totalTokens === 0) return "";
   const parts: string[] = [];
   if (rpm !== null) parts.push(`${rpm.toFixed(1)} req/min`);
   if (avgSec !== null) parts.push(`${avgSec.toFixed(0)}s avg`);
   if (trades > 0) parts.push(`${trades} trades`);
+  if (totalTokens > 0) parts.push(fmtTokens(totalTokens));
   return parts.join(" · ");
+}
+
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M tok`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}k tok`;
+  return `${n} tok`;
 }

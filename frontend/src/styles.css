@@ -410,6 +410,12 @@ body {
   font-size: 11px;
   color: var(--fg-muted);
 }
+.heatmap-pct {
+  font-size: 10px;
+  font-weight: 600;
+}
+.heatmap-tile[data-pnl="up"] .heatmap-pct { color: var(--trend-up); }
+.heatmap-tile[data-pnl="down"] .heatmap-pct { color: var(--trend-down); }
 
 .heatmap-tile.flash-up { animation: flash-up 600ms ease-out; }
 .heatmap-tile.flash-down { animation: flash-down 600ms ease-out; }

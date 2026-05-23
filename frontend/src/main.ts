@@ -445,7 +445,7 @@ function onTraderEvent(ev: TraderEvent): void {
   const panel = panels.get(ev.trader_id);
   if (!state || !panel) return;
   state.pushEvent(ev);
-  panel.update();
+  panel.updateLog();
 }
 
 function teardown(): void {

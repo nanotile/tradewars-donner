@@ -48,6 +48,14 @@ export class Heatmap {
       tile.dataset.pnl = h.unrealized_pnl >= 0 ? "up" : "down";
       tile.querySelector(".heatmap-value")!.textContent =
         formatMoney(h.market_value);
+      const costBasis = h.avg_cost * h.quantity;
+      const pctEl = tile.querySelector(".heatmap-pct")!;
+      if (costBasis > 0) {
+        const pct = (h.unrealized_pnl / costBasis) * 100;
+        pctEl.textContent = `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`;
+      } else {
+        pctEl.textContent = "";
+      }
 
       const dir = priceDirections[ticker];
       if (dir === "up" || dir === "down") flash(tile, dir);
@@ -60,6 +68,7 @@ export class Heatmap {
     tile.innerHTML = `
       <span class="heatmap-ticker">${ticker}</span>
       <span class="heatmap-value"></span>
+      <span class="heatmap-pct"></span>
     `;
     return tile;
   }
