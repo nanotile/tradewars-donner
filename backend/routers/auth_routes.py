@@ -9,12 +9,16 @@ UV Environment: uv run uvicorn --factory backend.api.app:create_app --port 8000
 Login endpoint + token validation. Rate-limited to 5/min on login.
 """
 
+import logging
+
 from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 import backend.auth as _auth_mod
+
+logger = logging.getLogger(__name__)
 from backend.auth import (
     authenticate_user,
     create_access_token,
@@ -49,10 +53,13 @@ async def login(request: Request, body: LoginRequest):
             "auth_disabled": True,
         }
 
+    client_ip = request.client.host if request.client else "unknown"
     user = authenticate_user(body.username, body.password)
     if not user:
+        logger.warning("Failed login attempt for '%s' from %s", body.username, client_ip)
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
+    logger.info("Successful login for '%s' from %s", user["username"], client_ip)
     token, expires_at = create_access_token(user["username"])
     return {
         "token": token,

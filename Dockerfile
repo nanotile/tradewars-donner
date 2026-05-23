@@ -29,15 +29,23 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen
 
+# Create non-root user early so uv tools install to their home.
+RUN adduser --disabled-password --gecos "" appuser
+
 # Massive MCP installed as a uv tool — same as on macOS dev.
+ENV UV_TOOL_DIR="/home/appuser/.local/share/uv/tools"
+ENV UV_TOOL_BIN_DIR="/home/appuser/.local/bin"
 RUN uv tool install --no-cache "mcp_massive @ git+https://github.com/massive-com/mcp_massive@v0.9.1"
-ENV PATH="/root/.local/bin:${PATH}"
+ENV PATH="/home/appuser/.local/bin:${PATH}"
 
 # Backend source.
 COPY backend/ ./backend/
 
 # Built frontend (the FastAPI app mounts this dir at /).
 COPY --from=frontend-build /app/frontend/dist ./frontend_dist
+
+RUN chown -R appuser:appuser /app
+USER appuser
 
 EXPOSE 8000
 

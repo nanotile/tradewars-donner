@@ -43,13 +43,18 @@ def wipe_memory_files(trader_ids: list[str]) -> None:
             p.unlink()
 
 
+def _pick_env(*keys: str) -> dict[str, str]:
+    """Return only the named env vars that are set."""
+    return {k: os.environ[k] for k in keys if k in os.environ}
+
+
 def make_massive_mcp() -> MCPServerStdio:
     return MCPServerStdio(
         name="Massive",
         params={
             "command": "mcp_massive",
             "args": [],
-            "env": dict(os.environ),  # MASSIVE_API_KEY is read from here
+            "env": _pick_env("MASSIVE_API_KEY", "PATH"),
         },
         cache_tools_list=True,
         client_session_timeout_seconds=_MCP_INIT_TIMEOUT,
@@ -58,12 +63,14 @@ def make_massive_mcp() -> MCPServerStdio:
 
 def make_memory_mcp(trader_id: str) -> MCPServerStdio:
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    env = _pick_env("PATH", "NODE_PATH")
+    env["MEMORY_FILE_PATH"] = str(memory_file_path(trader_id))
     return MCPServerStdio(
         name=f"Memory[{trader_id}]",
         params={
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-memory"],
-            "env": {**os.environ, "MEMORY_FILE_PATH": str(memory_file_path(trader_id))},
+            "env": env,
         },
         cache_tools_list=True,
         client_session_timeout_seconds=_MCP_INIT_TIMEOUT,
