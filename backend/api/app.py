@@ -90,6 +90,7 @@ class ArenaHolder:
         *,
         duration_override: float | None = None,
         selections: list[dict] | None = None,
+        initiated_by: str | None = None,
     ) -> Arena:
         config = ArenaConfig.load(self.config_path)
         sel = selections if selections is not None else config.preset_selections("max")
@@ -97,7 +98,7 @@ class ArenaHolder:
         config = config.with_traders(traders)
         if duration_override is not None:
             config.duration_seconds = duration_override
-        self.arena = Arena(config=config, accounts=self.accounts, prices=self.prices)
+        self.arena = Arena(config=config, accounts=self.accounts, prices=self.prices, initiated_by=initiated_by)
         return self.arena
 
     def require(self) -> Arena:
@@ -153,9 +154,15 @@ def create_app(holder: ArenaHolder | None = None) -> FastAPI:
         token = None
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
-        else:
-            # SSE EventSource can't send headers — accept token as query param
-            token = request.query_params.get("token")
+        elif path == "/arena/stream":
+            ticket = request.query_params.get("ticket")
+            if ticket:
+                username = _auth_mod.consume_sse_ticket(ticket)
+                if not username:
+                    return JSONResponse(
+                        status_code=401, content={"detail": "Invalid or expired ticket"}
+                    )
+                return await call_next(request)
         if not token:
             return JSONResponse(
                 status_code=401, content={"detail": "Not authenticated"}
@@ -165,7 +172,18 @@ def create_app(holder: ArenaHolder | None = None) -> FastAPI:
             return JSONResponse(
                 status_code=401, content={"detail": "Invalid or expired token"}
             )
+        request.state.username = username
         return await call_next(request)
+
+    # Security headers — outermost so they apply to all responses including 401s
+    @app.middleware("http")
+    async def security_headers_middleware(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+        return response
 
     @app.get("/arena/config")
     def get_config() -> dict:
@@ -173,17 +191,19 @@ def create_app(holder: ArenaHolder | None = None) -> FastAPI:
         return json.loads(Path(holder.config_path).read_text())
 
     @app.post("/arena/start")
-    async def start(body: StartRequest | None = None) -> dict:
+    async def start(request: Request, body: StartRequest | None = None) -> dict:
         if holder.arena is not None and holder.arena._final_snapshot is None:
             await holder.arena.end()
         body = body or StartRequest()
         selections = (
             [s.model_dump() for s in body.selections] if body.selections is not None else None
         )
+        username = getattr(request.state, "username", None)
         try:
             arena = holder.new_arena(
                 duration_override=body.duration_seconds,
                 selections=selections,
+                initiated_by=username,
             )
         except KeyError as e:
             raise HTTPException(status_code=400, detail=f"Unknown selection: {e}") from e

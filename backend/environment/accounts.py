@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS games (
     started_at TEXT NOT NULL,
     ended_at TEXT NOT NULL,
     duration_seconds REAL NOT NULL,
-    final_results TEXT NOT NULL
+    final_results TEXT NOT NULL,
+    initiated_by TEXT
 );
 """
 
@@ -63,7 +64,13 @@ class Accounts:
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.conn.commit()
+
+    def _migrate(self) -> None:
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(games)").fetchall()}
+        if "initiated_by" not in cols:
+            self.conn.execute("ALTER TABLE games ADD COLUMN initiated_by TEXT")
 
     def close(self) -> None:
         self.conn.close()
@@ -201,14 +208,15 @@ class Accounts:
         ended_at: str,
         duration_seconds: float,
         final_results: dict[str, float],
+        initiated_by: str | None = None,
     ) -> int:
         with self.conn:
             cur = self.conn.execute(
                 """
-                INSERT INTO games (started_at, ended_at, duration_seconds, final_results)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO games (started_at, ended_at, duration_seconds, final_results, initiated_by)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (started_at, ended_at, duration_seconds, json.dumps(final_results)),
+                (started_at, ended_at, duration_seconds, json.dumps(final_results), initiated_by),
             )
             return int(cur.lastrowid)
 

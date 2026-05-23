@@ -1,6 +1,6 @@
 // Typed client for the Tradewars FastAPI backend.
 
-import { apiFetch, apiPost, getToken } from "./apiClient";
+import { apiFetch, apiPost } from "./apiClient";
 
 export interface HoldingDetail {
   quantity: number;
@@ -106,6 +106,13 @@ export async function fetchArenaConfig(): Promise<ArenaConfigCatalog> {
 const SSE_RECONNECT_BASE_MS = 1000;
 const SSE_RECONNECT_MAX_MS = 30000;
 
+async function fetchSseTicket(): Promise<string> {
+  const r = await apiPost("/api/auth/sse-ticket");
+  if (!r.ok) throw new Error(`sse-ticket failed: ${r.status}`);
+  const data = await r.json();
+  return data.ticket;
+}
+
 export function openStream(
   onEvent: (event: TraderEvent) => void,
   onError?: (err: Event) => void,
@@ -133,12 +140,15 @@ export function openStream(
     }
   }
 
-  function connect() {
+  async function connect() {
     if (closed) return;
-    const token = getToken();
-    const url = token
-      ? `/arena/stream?token=${encodeURIComponent(token)}`
-      : "/arena/stream";
+    let url = "/arena/stream";
+    try {
+      const ticket = await fetchSseTicket();
+      url = `/arena/stream?ticket=${encodeURIComponent(ticket)}`;
+    } catch {
+      /* fall through — server will 401 if ticket required */
+    }
     es = new EventSource(url);
 
     es.onopen = () => {
@@ -156,7 +166,7 @@ export function openStream(
         SSE_RECONNECT_MAX_MS,
       );
       attempt++;
-      reconnectTimer = setTimeout(connect, delay);
+      reconnectTimer = setTimeout(() => connect(), delay);
     };
   }
 

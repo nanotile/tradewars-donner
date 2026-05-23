@@ -22,8 +22,11 @@ logger = logging.getLogger(__name__)
 from backend.auth import (
     authenticate_user,
     create_access_token,
+    create_sse_ticket,
     decode_token,
     bump_jwt_version,
+    check_lockout,
+    record_login_failure,
     _load_users,
     _save_users,
     verify_password,
@@ -54,8 +57,11 @@ async def login(request: Request, body: LoginRequest):
         }
 
     client_ip = request.client.host if request.client else "unknown"
+    normalized = body.username.strip().lower()
+    check_lockout(normalized)
     user = authenticate_user(body.username, body.password)
     if not user:
+        record_login_failure(normalized)
         logger.warning("Failed login attempt for '%s' from %s", body.username, client_ip)
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
@@ -126,3 +132,9 @@ async def change_password(
     _save_users(users)
     bump_jwt_version(username)
     return {"ok": True, "message": "Password changed - all other sessions have been signed out"}
+
+
+@router.post("/sse-ticket")
+async def sse_ticket(request: Request, username: str = Depends(verify_auth)):
+    ticket = create_sse_ticket(username)
+    return {"ticket": ticket}

@@ -153,6 +153,7 @@ class Arena:
     config: ArenaConfig
     accounts: Accounts
     prices: Prices
+    initiated_by: str | None = None
     events: asyncio.Queue[TraderEvent] = field(default_factory=asyncio.Queue)
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
     _started_at: datetime | None = None
@@ -333,6 +334,7 @@ class Arena:
             ended_at=self._ended_at.isoformat(),
             duration_seconds=duration,
             final_results=final_results,
+            initiated_by=self.initiated_by,
         )
 
     # ---- streaming ----

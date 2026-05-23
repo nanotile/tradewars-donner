@@ -10,9 +10,12 @@ JWT auth with bcrypt passwords. Users stored in backend/data/users.json.
 Requires AUTH_SECRET_KEY env var unless DEV_MODE=true.
 """
 
+import fcntl
 import json
 import logging
 import os
+import secrets
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -55,6 +58,7 @@ def _load_users() -> dict:
 def _save_users(users: dict):
     USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(USERS_FILE, "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
         json.dump(users, f, indent=2)
 
 
@@ -148,3 +152,63 @@ def verify_admin(request: Request) -> str:
     if not user.get("is_admin", False):
         raise HTTPException(status_code=403, detail="Admin access required")
     return username
+
+
+# ---------------------------------------------------------------------------
+# SSE tickets — short-lived, single-use tokens for EventSource connections
+# ---------------------------------------------------------------------------
+_SSE_TICKET_TTL = timedelta(seconds=30)
+_sse_tickets: dict[str, tuple[str, datetime]] = {}  # ticket → (username, expires_at)
+_ticket_lock = threading.Lock()
+
+
+def create_sse_ticket(username: str) -> str:
+    ticket = secrets.token_urlsafe(32)
+    expires = datetime.now(timezone.utc) + _SSE_TICKET_TTL
+    with _ticket_lock:
+        _sse_tickets[ticket] = (username, expires)
+    return ticket
+
+
+def consume_sse_ticket(ticket: str) -> Optional[str]:
+    now = datetime.now(timezone.utc)
+    with _ticket_lock:
+        entry = _sse_tickets.pop(ticket, None)
+    if entry is None:
+        return None
+    username, expires = entry
+    if now > expires:
+        return None
+    return username
+
+
+# ---------------------------------------------------------------------------
+# Login lockout — 5 failures in 10 min → 15 min lockout per username
+# ---------------------------------------------------------------------------
+_LOCKOUT_FAILURES = 5
+_LOCKOUT_WINDOW = timedelta(minutes=10)
+_LOCKOUT_DURATION = timedelta(minutes=15)
+_login_failures: dict[str, list[datetime]] = {}  # username → [timestamps]
+_lockout_until: dict[str, datetime] = {}  # username → locked_until
+
+
+def check_lockout(username: str) -> None:
+    now = datetime.now(timezone.utc)
+    until = _lockout_until.get(username)
+    if until and now < until:
+        raise HTTPException(status_code=429, detail="Account temporarily locked")
+    if until and now >= until:
+        del _lockout_until[username]
+        _login_failures.pop(username, None)
+
+
+def record_login_failure(username: str) -> None:
+    now = datetime.now(timezone.utc)
+    cutoff = now - _LOCKOUT_WINDOW
+    attempts = _login_failures.get(username, [])
+    attempts = [t for t in attempts if t > cutoff]
+    attempts.append(now)
+    _login_failures[username] = attempts
+    if len(attempts) >= _LOCKOUT_FAILURES:
+        _lockout_until[username] = now + _LOCKOUT_DURATION
+        logger.warning("Account '%s' locked out after %d failed attempts", username, len(attempts))
