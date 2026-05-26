@@ -271,8 +271,6 @@ def create_app(holder: ArenaHolder | None = None) -> FastAPI:
             )
         except KeyError as e:
             raise HTTPException(status_code=400, detail=f"Unknown selection: {e}") from e
-        except StopIteration as e:
-            raise HTTPException(status_code=400, detail="Unknown reasoning_label for model") from e
         await arena.start()
         snap = await arena.tick()
         return asdict(snap)

@@ -15,9 +15,12 @@ Five routes, selected by `TraderConfig.provider`:
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from agents import AsyncOpenAI, ModelSettings, OpenAIChatCompletionsModel
 from agents.extensions.models.litellm_model import LitellmModel
@@ -38,11 +41,20 @@ def _install_anthropic_monkey_patch() -> None:
     """Widen LiteLLM's Opus-4.6-only gate on `output_config.effort="max"`.
 
     LiteLLM 1.83 whitelists only Opus 4.6 — Opus 4.7 accepts max too.
-    Idempotent; safe to call multiple times. Drop when LiteLLM 1.84+ ships.
+    Idempotent; safe to call multiple times. Drop when LiteLLM >= 1.84.
     """
     global _ANTHROPIC_PATCHED
     if _ANTHROPIC_PATCHED:
         return
+
+    from importlib.metadata import version
+    litellm_ver = version("litellm")
+    if tuple(int(x) for x in litellm_ver.split(".")[:2]) >= (1, 84):
+        logger.info(
+            "LiteLLM %s detected — Opus 4.7 monkey-patch may no longer be needed. "
+            "Test without it and remove if passing.",
+            litellm_ver,
+        )
 
     def _is_opus_4_6_or_4_7(model: str) -> bool:
         m = model.lower()

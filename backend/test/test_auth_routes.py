@@ -254,3 +254,27 @@ def test_non_admin_cannot_list_users(client, _seed_user):
 
     r = client.get("/api/admin/users", headers=headers)
     assert r.status_code == 403
+
+
+# ---- DEV_MODE admin gate ----
+
+def test_dev_mode_without_dev_admin_blocks_admin_routes(monkeypatch, holder):
+    monkeypatch.setattr(auth_mod, "AUTH_SECRET_KEY", "")
+    monkeypatch.setattr(auth_mod, "DEV_MODE", True)
+    monkeypatch.setattr(auth_mod, "DEV_ADMIN", False)
+    app = create_app(holder=holder)
+    app.state.limiter.enabled = False
+    with TestClient(app) as c:
+        assert c.get("/api/admin/users").status_code == 403
+        assert c.post("/arena/start").status_code == 403
+        assert c.post("/arena/stop").status_code == 403
+
+
+def test_dev_mode_with_dev_admin_allows_admin_routes(monkeypatch, holder):
+    monkeypatch.setattr(auth_mod, "AUTH_SECRET_KEY", "")
+    monkeypatch.setattr(auth_mod, "DEV_MODE", True)
+    monkeypatch.setattr(auth_mod, "DEV_ADMIN", True)
+    app = create_app(holder=holder)
+    app.state.limiter.enabled = False
+    with TestClient(app) as c:
+        assert c.get("/api/admin/users").status_code == 200

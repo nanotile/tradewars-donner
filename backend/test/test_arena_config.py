@@ -91,8 +91,8 @@ def test_unknown_model_id_raises_keyerror(cfg):
         cfg.from_selections([{"model_id": "nope", "reasoning_label": "max"}])
 
 
-def test_unknown_reasoning_label_raises_stopiteration(cfg):
-    with pytest.raises(StopIteration):
+def test_unknown_reasoning_label_raises_key_error(cfg):
+    with pytest.raises(KeyError, match="Unknown reasoning_label"):
         cfg.from_selections([{"model_id": "claude-opus-4-7", "reasoning_label": "ultra"}])
 
 

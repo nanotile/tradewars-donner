@@ -77,8 +77,12 @@ class ArenaConfig:
             spec = self.models[sel["model_id"]]
             label = sel["reasoning_label"]
             reasoning = next(
-                opt["reasoning"] for opt in spec["reasoning_options"] if opt["label"] == label
+                (opt["reasoning"] for opt in spec["reasoning_options"] if opt["label"] == label),
+                None,
             )
+            if reasoning is None:
+                raise KeyError(f"Unknown reasoning_label '{label}' for model '{sel['model_id']}'")
+
             base_id = f"{spec['display_name']} ({label})"
             count = used.get(base_id, 0) + 1
             used[base_id] = count

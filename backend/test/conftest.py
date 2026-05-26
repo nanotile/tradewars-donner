@@ -28,6 +28,7 @@ def disable_auth(monkeypatch):
     import backend.auth
     monkeypatch.setattr(backend.auth, "AUTH_SECRET_KEY", "")
     monkeypatch.setattr(backend.auth, "DEV_MODE", True)
+    monkeypatch.setattr(backend.auth, "DEV_ADMIN", True)
 
 
 @pytest.fixture

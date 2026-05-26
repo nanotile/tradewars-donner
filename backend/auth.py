@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 AUTH_SECRET_KEY = os.environ.get("AUTH_SECRET_KEY", "")
 DEV_MODE = os.environ.get("DEV_MODE", "").lower() in ("1", "true", "yes")
+DEV_ADMIN = os.environ.get("DEV_ADMIN", "").lower() in ("1", "true", "yes")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 REFRESH_TOKEN_EXPIRE_DAYS = 7
@@ -41,6 +42,10 @@ def check_auth_config() -> None:
         )
     if DEV_MODE and not AUTH_SECRET_KEY:
         logger.warning("AUTH DISABLED — DEV_MODE is set with no AUTH_SECRET_KEY")
+        if DEV_ADMIN:
+            logger.warning("DEV_ADMIN is set — admin actions are permitted without credentials")
+        else:
+            logger.info("Admin actions (arena start/stop, user management) require DEV_ADMIN=true")
 
 USERS_FILE = Path(__file__).resolve().parent / "data" / "users.json"
 
@@ -198,7 +203,12 @@ def verify_auth(request: Request):
 def verify_admin(request: Request) -> str:
     username = verify_auth(request)
     if DEV_MODE and not AUTH_SECRET_KEY:
-        return username
+        if DEV_ADMIN:
+            return username
+        raise HTTPException(
+            status_code=403,
+            detail="Admin actions require DEV_ADMIN=true in dev mode",
+        )
 
     users = load_users()
     user = users.get(username, {})
