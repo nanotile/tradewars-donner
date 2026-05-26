@@ -13,6 +13,7 @@ const TYPE_LABELS: Record<TraderEvent["type"], string> = {
   message: "message",
   error: "error",
   liquidation: "liquidated",
+  game_over: "game over",
 };
 
 export class LogView {
@@ -62,6 +63,8 @@ function summarise(ev: TraderEvent): string {
       return `#${p.cycle}: ${String(p.error ?? "")}`;
     case "liquidation":
       return `${p.ticker} ×${p.quantity} @ ${p.price}`;
+    case "game_over":
+      return "game over";
   }
 }
 

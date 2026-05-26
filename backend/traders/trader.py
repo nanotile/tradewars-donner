@@ -111,6 +111,12 @@ class Trader:
         self.events = events
         self.previous_rationale = ""
         self.cycle_count = 0
+        self.total_usage: dict[str, int] = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cached_tokens": 0,
+            "reasoning_tokens": 0,
+        }
 
     async def _emit(self, type_: str, payload: dict[str, Any]) -> None:
         await self.events.put(
@@ -141,6 +147,9 @@ class Trader:
             rationale = (result.final_output or "").strip()
             self.previous_rationale = rationale[:RATIONALE_MAX_CHARS]
             usage = _extract_usage(result)
+            if usage:
+                for k in self.total_usage:
+                    self.total_usage[k] += usage.get(k, 0)
             payload: dict[str, Any] = {"cycle": self.cycle_count, "rationale": self.previous_rationale}
             if usage:
                 payload["usage"] = usage

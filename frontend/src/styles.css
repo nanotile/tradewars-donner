@@ -956,6 +956,13 @@ body.login-active .panels {
 .history-pnl[data-trend="up"] { color: var(--trend-up); }
 .history-pnl[data-trend="down"] { color: var(--trend-down); }
 
+.history-tokens {
+  display: block;
+  font-size: 10px;
+  color: var(--fg-muted, #888);
+  margin-top: 2px;
+}
+
 /* ---- Mobile menu button ---- */
 
 .mobile-menu-btn {

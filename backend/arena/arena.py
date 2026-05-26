@@ -163,6 +163,7 @@ class Arena:
     _final_snapshot: ArenaSnapshot | None = None
     _auto_end_task: asyncio.Task | None = None
     _end_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _traders: list[Trader] = field(default_factory=list)
 
     # ---- lifecycle ----
 
@@ -188,6 +189,7 @@ class Arena:
                 rival_ids=[t.id for t in self.config.traders if t.id != cfg.id],
             )
             trader = Trader(config=cfg, context=ctx, events=self.events)
+            self._traders.append(trader)
             self._tasks.append(asyncio.create_task(
                 trader.run_until_stopped(self.stop_event),
                 name=f"trader-{cfg.id}",
@@ -238,6 +240,14 @@ class Arena:
             snapshot = await self._snapshot(running=False)
             self._record_game(snapshot)
             self._final_snapshot = snapshot
+
+            from dataclasses import asdict
+            await self.events.put(TraderEvent(
+                trader_id="arena",
+                type="game_over",
+                timestamp=self._ended_at.isoformat(),
+                payload=asdict(snapshot),
+            ))
             await self.events.put(None)  # sentinel — terminates stream()
             return snapshot
 
@@ -330,12 +340,14 @@ class Arena:
         assert self._started_at is not None and self._ended_at is not None
         duration = (self._ended_at - self._started_at).total_seconds()
         final_results = {t.trader_id: t.total_pnl for t in snapshot.traders}
+        token_usage = {t.config.id: dict(t.total_usage) for t in self._traders}
         self.accounts.record_game(
             started_at=self._started_at.isoformat(),
             ended_at=self._ended_at.isoformat(),
             duration_seconds=duration,
             final_results=final_results,
             initiated_by=self.initiated_by,
+            token_usage=token_usage,
         )
 
     # ---- streaming ----

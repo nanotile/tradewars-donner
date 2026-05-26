@@ -441,6 +441,11 @@ function openEventStream(): void {
 }
 
 function onTraderEvent(ev: TraderEvent): void {
+  if (ev.type === "game_over") {
+    const snap = ev.payload as unknown as ArenaSnapshot;
+    applySnapshot(snap);
+    return;
+  }
   const state = states.get(ev.trader_id);
   const panel = panels.get(ev.trader_id);
   if (!state || !panel) return;
@@ -521,9 +526,13 @@ function renderHistoryGames(container: HTMLElement, games: GameHistoryEntry[]): 
     ranked.forEach(([name, pnl], i) => {
       const trend = pnl >= 0 ? "up" : "down";
       const sign = pnl >= 0 ? "+" : "";
+      const usage = game.token_usage?.[name];
+      const tokenStr = usage
+        ? `<span class="history-tokens">${fmtTokens(usage.input_tokens)} in · ${fmtTokens(usage.output_tokens)} out${usage.cached_tokens ? ` · ${fmtTokens(usage.cached_tokens)} cached` : ""}</span>`
+        : "";
       rows += `<div class="history-result ${i === 0 ? "history-winner" : ""}">
         <span class="history-rank">${i + 1}</span>
-        <span class="history-name">${name}</span>
+        <span class="history-name">${name}${tokenStr}</span>
         <span class="history-pnl" data-trend="${trend}">${sign}${fmtMoney(pnl)}</span>
       </div>`;
     });

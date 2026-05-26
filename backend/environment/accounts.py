@@ -71,6 +71,8 @@ class Accounts:
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(games)").fetchall()}
         if "initiated_by" not in cols:
             self.conn.execute("ALTER TABLE games ADD COLUMN initiated_by TEXT")
+        if "token_usage" not in cols:
+            self.conn.execute("ALTER TABLE games ADD COLUMN token_usage TEXT")
 
     def close(self) -> None:
         self.conn.close()
@@ -209,22 +211,26 @@ class Accounts:
         duration_seconds: float,
         final_results: dict[str, float],
         initiated_by: str | None = None,
+        token_usage: dict[str, dict[str, int]] | None = None,
     ) -> int:
         with self.conn:
             cur = self.conn.execute(
                 """
-                INSERT INTO games (started_at, ended_at, duration_seconds, final_results, initiated_by)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO games (started_at, ended_at, duration_seconds, final_results, initiated_by, token_usage)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (started_at, ended_at, duration_seconds, json.dumps(final_results), initiated_by),
+                (started_at, ended_at, duration_seconds, json.dumps(final_results),
+                 initiated_by, json.dumps(token_usage) if token_usage else None),
             )
             return int(cur.lastrowid)
 
     def list_games(self) -> list[dict]:
         rows = self.conn.execute(
-            "SELECT id, started_at, ended_at, duration_seconds, final_results, initiated_by FROM games ORDER BY id DESC"
+            "SELECT id, started_at, ended_at, duration_seconds, final_results, initiated_by, token_usage FROM games ORDER BY id DESC"
         ).fetchall()
-        return [
-            {**dict(r), "final_results": json.loads(r["final_results"])}
-            for r in rows
-        ]
+        result = []
+        for r in rows:
+            entry = {**dict(r), "final_results": json.loads(r["final_results"])}
+            entry["token_usage"] = json.loads(r["token_usage"]) if r["token_usage"] else None
+            result.append(entry)
+        return result

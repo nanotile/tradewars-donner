@@ -62,7 +62,8 @@ export interface TraderEvent {
     | "tool_output"
     | "message"
     | "error"
-    | "liquidation";
+    | "liquidation"
+    | "game_over";
   timestamp: string;
   payload: Record<string, unknown>;
 }
@@ -114,6 +115,13 @@ export async function fetchArenaStatus(): Promise<ArenaStatus> {
   return r.json();
 }
 
+export interface TokenUsageEntry {
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  reasoning_tokens: number;
+}
+
 export interface GameHistoryEntry {
   id: number;
   started_at: string;
@@ -121,6 +129,7 @@ export interface GameHistoryEntry {
   duration_seconds: number;
   final_results: Record<string, number>;
   initiated_by: string | null;
+  token_usage: Record<string, TokenUsageEntry> | null;
 }
 
 export async function fetchGameHistory(): Promise<GameHistoryEntry[]> {
@@ -156,6 +165,7 @@ export function openStream(
     "message",
     "error",
     "liquidation",
+    "game_over",
   ];
 
   function dispatch(e: MessageEvent) {
