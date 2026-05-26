@@ -4,7 +4,7 @@ Input sources: CURRENT_TASK.md, CLAUDE.md, PLAN.md, prior EVALUATE_REPORT.md (20
 
 ## Executive Summary
 
-Tradewars continues to improve. The 5 quick-win fixes (commit 5d6820e) resolved 6 of the prior evaluation's 38 findings: atomic `save_users`, lockout thread safety, arena admin-gating, auth expiry toast, `--admin` CLI flag, and `users.json` permissions. No Critical or High findings exist. The Tier 2 `DEV_MODE` admin footgun has been resolved — admin privileges now require an explicit `DEV_ADMIN=true` env var, separate from `DEV_MODE`. All remaining findings are Tier 3. The codebase is well-structured with 103 passing tests and a clean architecture; the remaining work is incremental polish, not structural risk.
+Tradewars continues to improve. The 5 quick-win fixes (commit 5d6820e) resolved 6 of the prior evaluation's 38 findings: atomic `save_users`, lockout thread safety, arena admin-gating, auth expiry toast, `--admin` CLI flag, and `users.json` permissions. No Critical or High findings exist. The Tier 2 `DEV_MODE` admin footgun has been resolved — admin privileges now require an explicit `DEV_ADMIN=true` env var, separate from `DEV_MODE`. All remaining findings are Tier 3. The codebase is well-structured with 120 passing tests and a clean architecture; the remaining work is incremental polish, not structural risk.
 
 ## Evaluation Scope
 | Domain                              | Files Reviewed | Findings |
@@ -25,6 +25,15 @@ Tradewars continues to improve. The 5 quick-win fixes (commit 5d6820e) resolved 
 | Any authenticated user can start/stop arena | **RESOLVED** — `verify_admin()` on start and stop |
 | `users.json` world-readable (mode 664) | **RESOLVED** — `os.chmod(tmp, 0o600)` before `os.replace` |
 | `DEV_MODE` grants blanket admin privileges | **RESOLVED** — admin bypass now requires separate `DEV_ADMIN=true` env var |
+| No `trader.py` unit tests | **RESOLVED** — 17 tests for `_format_output` and `_extract_usage` |
+| LiteLLM monkey-patch no removal signal | **RESOLVED** — version check logs when `>=1.84` detected |
+| Token usage not persisted | **RESOLVED** — `token_usage` column in `games` table, per-trader cumulative tracking, displayed in history modal |
+| `StopIteration` as failure signal | **RESOLVED** — replaced with `KeyError` with descriptive message |
+| No `game_over` SSE event | **RESOLVED** — explicit `game_over` event with final snapshot before stream sentinel |
+| `INTER_CYCLE_SLEEP_SECONDS` not configurable | **RESOLVED** — now in `config.json`, threaded through `ArenaConfig` → `Trader` |
+| No `Content-Security-Policy` header | **RESOLVED** — CSP + `Permissions-Policy` headers added |
+| pytest in production dependencies | **RESOLVED** — moved to dev dependency group |
+| No `Permissions-Policy` header | **RESOLVED** — added alongside CSP |
 
 Note: The on-disk `users.json` retains its pre-fix 0664 permissions until the next `save_users()` call. Run `chmod 600 backend/data/users.json` once to close the gap immediately.
 
@@ -38,10 +47,11 @@ Note: The on-disk `users.json` retains its pre-fix 0664 permissions until the ne
 | test_arena_config.py | 10 | 10 pass |
 | test_arena_integration.py | 1 | 1 pass (opt-in marker) |
 | test_auth_routes.py | 16 | 16 pass |
+| test_trader.py | 17 | 17 pass |
 | test_models.py | 14 | 14 pass |
 | test_prices.py | 6 | deselected (Massive API auth) |
 | test_tools.py | 15 | 15 pass |
-| **Total** | **103 pass, 0 fail** | |
+| **Total** | **120 pass, 0 fail** | |
 
 ## Ranked Enhancement List
 
@@ -56,20 +66,20 @@ _No findings remain at Tier 2. Former Tier 2 finding (DEV_MODE admin footgun) re
 ### Tier 3 — Do Later (Score <= 3)
 | # | Finding | Domain | Severity | Effort | Impact | Score |
 |---|---------|--------|----------|--------|--------|-------|
-| 2 | No `trader.py` unit tests — `_format_output`, `_extract_usage`, event forwarding untested | Architecture | Medium | Low | Medium | 3 |
-| 3 | LiteLLM monkey-patch has no automated removal signal | Architecture | Medium | Low | Medium | 3 |
-| 4 | Token usage not persisted to DB; history modal shows no token data | Feature | Medium | Low | Medium | 3 |
+| ~~2~~ | ~~No `trader.py` unit tests~~ | ~~Architecture~~ | | | | **RESOLVED** |
+| ~~3~~ | ~~LiteLLM monkey-patch has no automated removal signal~~ | ~~Architecture~~ | | | | **RESOLVED** |
+| ~~4~~ | ~~Token usage not persisted to DB~~ | ~~Feature~~ | | | | **RESOLVED** |
 | 5 | No CI pipeline — all quality gates manual | Architecture | Medium | Medium | Medium | 2 |
-| 6 | `StopIteration` used as failure signal in config resolution | Architecture | Medium | Low | Low | 2 |
+| ~~6~~ | ~~`StopIteration` used as failure signal~~ | ~~Architecture~~ | | | | **RESOLVED** |
 | 7 | Mid-game reconnect loses cumulative token counts | Feature | Medium | Medium | Medium | 2 |
-| 8 | No explicit `game_over` SSE event — leaderboard depends on tick timing | Feature | Low | Low | Medium | 2 |
-| 9 | `INTER_CYCLE_SLEEP_SECONDS` not configurable via UI/config | Feature | Low | Low | Medium | 2 |
-| 10 | No `Content-Security-Policy` header | Security | Medium | Medium | Medium | 2 |
+| ~~8~~ | ~~No explicit `game_over` SSE event~~ | ~~Feature~~ | | | | **RESOLVED** |
+| ~~9~~ | ~~`INTER_CYCLE_SLEEP_SECONDS` not configurable~~ | ~~Feature~~ | | | | **RESOLVED** |
+| ~~10~~ | ~~No `Content-Security-Policy` header~~ | ~~Security~~ | | | | **RESOLVED** |
 | 11 | JWT tokens stored in `localStorage` (XSS-readable) | Security | Medium | Medium | Medium | 2 |
 | 12 | Per-tick N+1 query pattern — ~28 SELECTs per tick | Performance | Medium | Medium | Medium | 2 |
 | 13 | Single-consumer SSE queue — second tab gets sparse stream | Performance | Medium | Medium | Medium | 2 |
 | 14 | `get_state_impl()` generates ~14 SQLite queries per invocation | Performance | Medium | Medium | Medium | 2 |
-| 15 | pytest/pytest-asyncio in production dependencies | Architecture | Low | Low | Low | 1 |
+| ~~15~~ | ~~pytest/pytest-asyncio in production dependencies~~ | ~~Architecture~~ | | | | **RESOLVED** |
 | 16 | `app.py` accesses private Arena attributes (`_started_at`, `_final_snapshot`) | Architecture | Low | Low | Low | 1 |
 | 17 | Minor code quality: `Optional[T]` vs `T|None`, missing `Path` import, no linting config, mixed import style | Architecture | Low | Low | Low | 1 |
 | 18 | `save_users` flock on `.tmp` file is structurally inert as cross-process mutex | Architecture | Low | Low | Low | 1 |
@@ -86,7 +96,7 @@ _No findings remain at Tier 2. Former Tier 2 finding (DEV_MODE admin footgun) re
 | 29 | Ticker input not validated before external API call | Security | Low | Low | Low | 1 |
 | 30 | HSTS sent unconditionally over HTTP | Security | Low | Low | Low | 1 |
 | 31 | Auth check runs after format validation in DELETE endpoint | Security | Low | Low | Low | 1 |
-| 32 | No `Permissions-Policy` header | Security | Low | Low | Low | 1 |
+| ~~32~~ | ~~No `Permissions-Policy` header~~ | ~~Security~~ | | | | **RESOLVED** |
 | 33 | SQLite `execute_trade()` blocks event loop (sub-ms in practice) | Performance | Medium | Medium | Low | 1 |
 | 34 | `get_config` reads `config.json` from disk on every request | Performance | Low | Low | Low | 1 |
 | 35 | `load_users()` called 2-3 times per request (mtime cache mitigates) | Performance | Low | Low | Low | 1 |

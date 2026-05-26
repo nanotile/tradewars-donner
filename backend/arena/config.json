@@ -1,6 +1,7 @@
 {
   "duration_seconds": 720,
   "max_tokens": 64000,
+  "inter_cycle_sleep_seconds": 10.0,
   "models": {
     "claude-opus-4-7": {
       "display_name": "Claude Opus 4.7",

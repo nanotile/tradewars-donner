@@ -41,6 +41,7 @@ class ArenaConfig:
     duration_seconds: float
     traders: list[TraderConfig] = field(default_factory=list)
     max_tokens: int = 64_000
+    inter_cycle_sleep_seconds: float = 10.0
     models: dict[str, dict] = field(default_factory=dict)   # model_id → spec
     presets: dict[str, list] = field(default_factory=dict)  # preset name → list of selections
 
@@ -50,6 +51,7 @@ class ArenaConfig:
         return cls(
             duration_seconds=float(data["duration_seconds"]),
             max_tokens=int(data["max_tokens"]),
+            inter_cycle_sleep_seconds=float(data.get("inter_cycle_sleep_seconds", 10.0)),
             models=data["models"],
             presets=data["presets"],
         )
@@ -59,6 +61,7 @@ class ArenaConfig:
         return ArenaConfig(
             duration_seconds=self.duration_seconds,
             max_tokens=self.max_tokens,
+            inter_cycle_sleep_seconds=self.inter_cycle_sleep_seconds,
             models=self.models,
             presets=self.presets,
             traders=traders,
@@ -188,7 +191,10 @@ class Arena:
                 duration_seconds=self.config.duration_seconds,
                 rival_ids=[t.id for t in self.config.traders if t.id != cfg.id],
             )
-            trader = Trader(config=cfg, context=ctx, events=self.events)
+            trader = Trader(
+                config=cfg, context=ctx, events=self.events,
+                inter_cycle_sleep=self.config.inter_cycle_sleep_seconds,
+            )
             self._traders.append(trader)
             self._tasks.append(asyncio.create_task(
                 trader.run_until_stopped(self.stop_event),

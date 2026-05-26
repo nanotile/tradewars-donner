@@ -105,10 +105,12 @@ class Trader:
         config: TraderConfig,
         context: TraderContext,
         events: asyncio.Queue[TraderEvent],
+        inter_cycle_sleep: float = INTER_CYCLE_SLEEP_SECONDS,
     ):
         self.config = config
         self.context = context
         self.events = events
+        self.inter_cycle_sleep = inter_cycle_sleep
         self.previous_rationale = ""
         self.cycle_count = 0
         self.total_usage: dict[str, int] = {
@@ -224,4 +226,4 @@ class Trader:
                 await self._run_one_cycle(agent)
                 if stop_event.is_set():
                     break
-                await asyncio.sleep(INTER_CYCLE_SLEEP_SECONDS)
+                await asyncio.sleep(self.inter_cycle_sleep)
